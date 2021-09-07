@@ -36,10 +36,10 @@ class DengueDataApi:
         return self.__features_train
 
     def get_x_data(self):
-        return self.__x_data
+        return self.__x_data.copy()
 
     def get_y_data(self):
-        return self.__y_data
+        return self.__y_data.copy()
 
     def normalize_x_data(self, x_data):
         return (x_data - self.__x_mean.values[np.newaxis, :]) / self.__x_std.values[np.newaxis, :]

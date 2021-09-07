@@ -9,18 +9,18 @@ class PoissonGLM(AbstractModel):
 
     def __init__(self, x_train, y_train, sigma2):
         super(PoissonGLM, self).__init__(x_train=x_train, y_train=y_train)
-        self.__cov_map = None
-        self.__sigma2 = sigma2
-        self.__num_rows = len(x_train)
+        self._cov_map = None
+        self._sigma2 = sigma2
+        self._num_rows = len(x_train)
 
     def get_cov_map(self):
-        return self.__cov_map
+        return self._cov_map
 
     def log_joint(self, y, X, w=None, sigma2=None):
         if w is None:
-            w = self.__w_map
+            w = self._w_map
         if sigma2 is None:
-            sigma2 = self.__sigma2
+            sigma2 = self._sigma2
         ljp = -np.dot(w, w)/(2 * sigma2)
         ljp += np.dot(y, np.dot(X, w))
         ljp -= np.sum(np.exp(np.dot(X, w)))
@@ -39,8 +39,8 @@ class PoissonGLM(AbstractModel):
         # Minimize the log joint. Normalize by N so it's better scaled.
         x_train = self.get_x_train()
         y_train = self.get_y_train()
-        obj = lambda w: -self.log_joint(y_train, x_train, w, self.__sigma2) / self.__num_rows
-        obj_grad = lambda w: -self.log_joint_grad(y_train, x_train, w, self.__sigma2) / self.__num_rows
+        obj = lambda w: -self.log_joint(y_train, x_train, w, self._sigma2) / self._num_rows
+        obj_grad = lambda w: -self.log_joint_grad(y_train, x_train, w, self._sigma2) / self._num_rows
 
         # Keep track of the weights visited during optimization.
         w_init = np.zeros(x_train.shape[1])
@@ -52,21 +52,24 @@ class PoissonGLM(AbstractModel):
         result = minimize(obj, w_init, jac=obj_grad, callback=callback, method="BFGS")
         w_hist = np.array(w_hist)
 
-        self.__w_map = w_hist[-1]
+        self._w_map = w_hist[-1]
 
         return result, w_hist
 
     def sample_posterior_w(self, num_samples):
-        w_s = np.random.multivariate_normal(mean=self.__w_map, cov=self.__cov_map, size=num_samples)
+        w_s = np.random.multivariate_normal(mean=self._w_map, cov=self._cov_map, size=num_samples)
         return w_s
 
     def compute_laplace_approximation(self):
         y_train = self.get_y_train()
         x_train = self.get_x_train()
-        self.__cov_map = -np.linalg.inv(self.log_joint_hess(y_train, x_train, self.__w_map, self.__sigma2))
+        if self._w_map is None:
+            self.compute_posterior_mode()
+        self._cov_map = -np.linalg.inv(self.log_joint_hess(y_train, x_train, self._w_map, self._sigma2))
         return None
 
     def get_posterior_predictive_distribution(self, x_validate, y_validate, ncols, num_samples):
+        print("Sampling posterior predictive distribution...")
         max_count = y_validate[:ncols].max()
         num_validate = len(x_validate)
         posterior_predictive_distribution = np.zeros([max_count + 1, num_validate])

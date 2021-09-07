@@ -8,18 +8,18 @@ BIAS_COL = 'bias'
 class AbstractModel:
 
     def __init__(self, x_train, y_train, bias=True):
-        self.__w_map = None
-        self.__bias = bias
+        self._w_map = None
+        self._bias = bias
         if bias:
             x_train[BIAS_COL] = 1.
-        self.__x_train = x_train
-        self.__y_train = y_train
+        self._x_train = x_train
+        self._y_train = y_train
 
     def get_x_train(self):
-        return self.__x_train
+        return self._x_train
 
     def get_y_train(self):
-        return self.__y_train
+        return self._y_train
 
     def log_joint(self, y, X):
         raise NotImplementedError
@@ -33,7 +33,7 @@ class AbstractModel:
         raise NotImplementedError
 
     def get_w_map(self):
-        return self.__w_map
+        return self._w_map
 
     def compute_posterior_mode(self):
         raise NotImplementedError
@@ -45,7 +45,7 @@ class AbstractModel:
         raise NotImplementedError
 
     def validate_model(self, x_validate, y_validate, ncols=100, num_samples=1000, show_posterior_predictive_dist=True):
-        if self.__bias:
+        if self._bias:
             x_validate[BIAS_COL] = 1.
         if show_posterior_predictive_dist:
             posterior_predictive_distribution = self.get_posterior_predictive_distribution(x_validate, y_validate,
