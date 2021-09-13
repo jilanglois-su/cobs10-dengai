@@ -24,6 +24,9 @@ class AbstractModel:
     def log_joint(self, y, X):
         raise NotImplementedError
 
+    def obs_map(self, w, X):
+        raise NotImplementedError
+
     @staticmethod
     def log_joint_grad(y, X, w, sigma2):
         raise NotImplementedError
@@ -61,4 +64,7 @@ class AbstractModel:
 
         log_joint = self.log_joint(y_validate, x_validate)
 
-        return log_joint
+        e = np.abs(y_validate - self.obs_map(self._w_map, x_validate))
+        mae = e.mean()
+
+        return log_joint, mae

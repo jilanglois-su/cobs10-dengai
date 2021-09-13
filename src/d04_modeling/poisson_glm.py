@@ -79,6 +79,9 @@ class PoissonGLM(AbstractModel):
             posterior_predictive_distribution[k, :] = poisson.pmf(k, mu=lambda_n).mean(axis=1).T
         return posterior_predictive_distribution
 
+    def obs_map(self, w, X):
+        return np.floor(np.dot(X, w))
+
 
 if __name__ == "__main__":
     import os
@@ -103,4 +106,6 @@ if __name__ == "__main__":
     cov_map_df = pd.DataFrame(cov_map, index=x_train.columns, columns=x_train.columns)
     axs2 = sns.heatmap(cov_map_df)
 
-    poisson_glm.validate_model(x_validate=x_validate, y_validate=y_validate)
+    log_joint, mae = poisson_glm.validate_model(x_validate=x_validate, y_validate=y_validate)
+
+    print(log_joint, mae)
