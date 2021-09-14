@@ -7,40 +7,49 @@ from scipy.stats import poisson
 
 class PoissonGLM(AbstractModel):
 
-    def __init__(self, x_train, y_train, sigma2):
+    def __init__(self, x_train, y_train, sigma2, weights=None):
+        """
+        :param x_train: covariate data
+        :param y_train: outcome data
+        :param sigma2: hyperparameter for regression coefficients prior
+        :param weights: sample weights
+        """
         super(PoissonGLM, self).__init__(x_train=x_train, y_train=y_train)
         self._cov_map = None
         self._sigma2 = sigma2
         self._num_rows = len(x_train)
+        if weights is None:
+            weights = np.ones(y_train.shape)
+        self._weights = weights
 
     def get_cov_map(self):
         return self._cov_map
 
-    def log_joint(self, y, X, w=None, sigma2=None):
+    def log_joint(self, y, X, weights, w=None, sigma2=None):
         if w is None:
             w = self._w_map
         if sigma2 is None:
             sigma2 = self._sigma2
         ljp = -np.dot(w, w)/(2 * sigma2)
-        ljp += np.dot(y, np.dot(X, w))
-        ljp -= np.sum(np.exp(np.dot(X, w)))
+        ljp += np.dot(y * weights, np.dot(X, w))
+        ljp -= np.sum(np.exp(np.dot(X, w) * weights))
 
         return ljp
 
     @staticmethod
-    def log_joint_grad(y, X, w, sigma2):
-        return -w/sigma2 + np.dot(X.T, y) - np.dot(X.T, np.exp(np.dot(X, w))).T
+    def log_joint_grad(y, X, weights, w, sigma2):
+        return -w/sigma2 + np.dot(X.T, y * weights) - np.dot(X.T, np.exp(np.dot(X, w) * weights)).T
 
     @staticmethod
-    def log_joint_hess(y, X, w, sigma2):
-        return -np.eye(len(w)) / sigma2 - np.dot(X.T, np.multiply(X, np.exp(np.dot(X, w))[:, np.newaxis]))
+    def log_joint_hess(y, X, weights, w, sigma2):
+        return -np.eye(len(w)) / sigma2 - np.dot(X.T, np.multiply(X, np.exp(np.dot(X, w) * weights)[:, np.newaxis]))
 
     def compute_posterior_mode(self):
         # Minimize the log joint. Normalize by N so it's better scaled.
         x_train = self.get_x_train()
         y_train = self.get_y_train()
-        obj = lambda w: -self.log_joint(y_train, x_train, w, self._sigma2) / self._num_rows
-        obj_grad = lambda w: -self.log_joint_grad(y_train, x_train, w, self._sigma2) / self._num_rows
+        obj = lambda w: -self.log_joint(y_train, x_train, self._weights, w, self._sigma2) / self._num_rows
+        obj_grad = lambda w: -self.log_joint_grad(y_train, x_train, self._weights, w, self._sigma2) / self._num_rows
 
         # Keep track of the weights visited during optimization.
         w_init = np.zeros(x_train.shape[1])
@@ -65,7 +74,7 @@ class PoissonGLM(AbstractModel):
         x_train = self.get_x_train()
         if self._w_map is None:
             self.compute_posterior_mode()
-        self._cov_map = -np.linalg.inv(self.log_joint_hess(y_train, x_train, self._w_map, self._sigma2))
+        self._cov_map = -np.linalg.inv(self.log_joint_hess(y_train, x_train, self._weights, self._w_map, self._sigma2))
         return None
 
     def get_posterior_predictive_distribution(self, x_validate, y_validate, ncols, num_samples):
@@ -96,7 +105,7 @@ if __name__ == "__main__":
 
     _, w_hist = poisson_glm.compute_posterior_mode()
     w_hist_df = pd.DataFrame(w_hist, columns=x_train.columns)
-    w_hist_df['log_joint'] = w_hist_df.apply(lambda w: poisson_glm.log_joint(y_train, x_train,
+    w_hist_df['log_joint'] = w_hist_df.apply(lambda w: poisson_glm.log_joint(y_train, x_train, 1.,
                                                                              w.values, sigma2), axis=1)
     w_hist_df.name = 'iter'
     axs1 = sns.lineplot(data=w_hist_df.iloc[1:].reset_index(), x="index", y="log_joint")

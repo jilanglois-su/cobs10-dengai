@@ -21,18 +21,18 @@ class AbstractModel:
     def get_y_train(self):
         return self._y_train
 
-    def log_joint(self, y, X):
+    def log_joint(self, y, X, weights):
         raise NotImplementedError
 
     def obs_map(self, w, X):
         raise NotImplementedError
 
     @staticmethod
-    def log_joint_grad(y, X, w, sigma2):
+    def log_joint_grad(y, X, weight, w, sigma2):
         raise NotImplementedError
 
     @staticmethod
-    def log_joint_hess(y, X, w, sigma2):
+    def log_joint_hess(y, X, weigth, w, sigma2):
         raise NotImplementedError
 
     def get_w_map(self):
@@ -47,7 +47,7 @@ class AbstractModel:
     def get_posterior_predictive_distribution(self, x_validate, y_validate, ncols, num_samples):
         raise NotImplementedError
 
-    def validate_model(self, x_validate, y_validate, ncols=100, num_samples=1000, show_posterior_predictive_dist=True):
+    def validate_model(self, x_validate, y_validate, weights_validate=None, ncols=100, num_samples=1000, show_posterior_predictive_dist=True):
         if self._bias:
             x_validate[BIAS_COL] = 1.
         if show_posterior_predictive_dist:
@@ -62,7 +62,9 @@ class AbstractModel:
             fig.colorbar(cm)
             plt.show()
 
-        log_joint = self.log_joint(y_validate, x_validate)
+        if weights_validate is None:
+            weights_validate = np.ones(y_validate.shape)
+        log_joint = self.log_joint(y_validate, x_validate, weights_validate)
 
         e = np.abs(y_validate - self.obs_map(self._w_map, x_validate))
         mae = e.mean()
