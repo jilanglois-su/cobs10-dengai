@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class CrossValidation:
     def __init__(self, event_data, folds):
         self.folds = folds
