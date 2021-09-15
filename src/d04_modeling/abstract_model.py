@@ -16,10 +16,12 @@ class AbstractModel:
         self._y_train = y_train
 
     def get_x_train(self):
-        return self._x_train
+        if isinstance(self._x_train, pd.DataFrame):
+            return self._x_train.values
 
     def get_y_train(self):
-        return self._y_train
+        if isinstance(self._y_train, pd.Series):
+            return self._y_train.values.reshape((-1, 1))
 
     def log_joint(self, y, X, weights):
         raise NotImplementedError
@@ -50,6 +52,10 @@ class AbstractModel:
     def validate_model(self, x_validate, y_validate, weights_validate=None, ncols=100, num_samples=1000, show_posterior_predictive_dist=True):
         if self._bias:
             x_validate[BIAS_COL] = 1.
+        if isinstance(x_validate, pd.DataFrame):
+            x_validate = x_validate.values
+        if isinstance(y_validate, pd.Series):
+            y_validate = y_validate.values.reshape((-1, 1))
         if show_posterior_predictive_dist:
             posterior_predictive_distribution = self.get_posterior_predictive_distribution(x_validate, y_validate,
                                                                                            ncols, num_samples)
@@ -63,10 +69,11 @@ class AbstractModel:
             plt.show()
 
         if weights_validate is None:
-            weights_validate = np.ones(y_validate.shape)
+            weights_validate = np.ones(y_validate.shape).reshape((-1, 1))
         log_joint = self.log_joint(y_validate, x_validate, weights_validate)
 
-        e = np.abs(y_validate - self.obs_map(self._w_map, x_validate))
+        y_hat = self.obs_map(self._w_map, x_validate)
+        e = np.abs(y_validate - y_hat)
         mae = e.mean()
 
         return log_joint, mae

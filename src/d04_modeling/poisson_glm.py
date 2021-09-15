@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from scipy.optimize import minimize
 from src.d04_modeling.abstract_model import AbstractModel
 from tqdm import tqdm
@@ -7,19 +8,20 @@ from scipy.stats import poisson
 
 class PoissonGLM(AbstractModel):
 
-    def __init__(self, x_train, y_train, sigma2, weights=None):
+    def __init__(self, x_train, y_train, sigma2, weights=None, bias=True):
         """
         :param x_train: covariate data
         :param y_train: outcome data
         :param sigma2: hyperparameter for regression coefficients prior
         :param weights: sample weights
+        :param bias: add bias term to GLM
         """
-        super(PoissonGLM, self).__init__(x_train=x_train, y_train=y_train)
+        super(PoissonGLM, self).__init__(x_train=x_train, y_train=y_train, bias=bias)
         self._cov_map = None
         self._sigma2 = sigma2
         self._num_rows = len(x_train)
         if weights is None:
-            weights = np.ones(y_train.shape)
+            weights = np.ones(y_train.shape).reshape((-1, 1))
         self._weights = weights
 
     def get_cov_map(self):
@@ -31,18 +33,20 @@ class PoissonGLM(AbstractModel):
         if sigma2 is None:
             sigma2 = self._sigma2
         ljp = -np.dot(w, w)/(2 * sigma2)
-        ljp += np.dot(y * weights, np.dot(X, w))
-        ljp -= np.sum(np.exp(np.dot(X, w) * weights))
+        ljp += np.dot(np.dot(X, w).reshape((1, -1)), y * weights)[0, 0]
+        ljp -= np.sum(np.exp(np.dot(X, w)).reshape((-1, 1)) * weights)
 
         return ljp
 
     @staticmethod
     def log_joint_grad(y, X, weights, w, sigma2):
-        return -w/sigma2 + np.dot(X.T, y * weights) - np.dot(X.T, np.exp(np.dot(X, w) * weights)).T
+        return -w/sigma2 + np.dot(X.T, y * weights).flatten() \
+               - np.dot(X.T, np.exp(np.dot(X, w).reshape((-1, 1)) * weights)).flatten()
 
     @staticmethod
     def log_joint_hess(y, X, weights, w, sigma2):
-        return -np.eye(len(w)) / sigma2 - np.dot(X.T, np.multiply(X, np.exp(np.dot(X, w) * weights)[:, np.newaxis]))
+        return -np.eye(len(w)) / sigma2 \
+               - np.dot(X.T, np.multiply(X, (np.exp(np.dot(X, w).reshape((-1, 1))) * weights).flatten()[:, np.newaxis]))
 
     def compute_posterior_mode(self):
         # Minimize the log joint. Normalize by N so it's better scaled.
@@ -89,7 +93,7 @@ class PoissonGLM(AbstractModel):
         return posterior_predictive_distribution
 
     def obs_map(self, w, X):
-        return np.floor(np.dot(X, w))
+        return np.floor(np.dot(X, w).reshape((-1, 1)))
 
 
 if __name__ == "__main__":
@@ -105,7 +109,8 @@ if __name__ == "__main__":
 
     _, w_hist = poisson_glm.compute_posterior_mode()
     w_hist_df = pd.DataFrame(w_hist, columns=x_train.columns)
-    w_hist_df['log_joint'] = w_hist_df.apply(lambda w: poisson_glm.log_joint(y_train, x_train, 1.,
+    weights = np.ones(len(x_train)).reshape((-1, 1))
+    w_hist_df['log_joint'] = w_hist_df.apply(lambda w: poisson_glm.log_joint(y_train, x_train, weights,
                                                                              w.values, sigma2), axis=1)
     w_hist_df.name = 'iter'
     axs1 = sns.lineplot(data=w_hist_df.iloc[1:].reset_index(), x="index", y="log_joint")

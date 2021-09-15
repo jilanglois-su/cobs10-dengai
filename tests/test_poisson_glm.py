@@ -4,6 +4,7 @@ from src.d01_data.dengue_data_api import DengueDataApi
 from src.d04_modeling.poisson_glm import PoissonGLM
 from expected_values import *
 
+
 class TestPoissonGlm(TestCase):
 
     def test_loglikeihood(self):
@@ -12,9 +13,9 @@ class TestPoissonGlm(TestCase):
         sigma2 = 1.
         poisson_glm = PoissonGLM(x_train=x_train, y_train=y_train, sigma2=sigma2)
         weights = np.ones(len(x_train)).reshape((-1, 1))
-        obj = lambda w: -poisson_glm.log_joint(y_train.values, x_train.values, weights, w, sigma2) / len(x_train)
-        obj_grad = lambda w: -poisson_glm.log_joint_grad(y_train.values, x_train.values, weights, w, sigma2) / len(x_train)
-        obj_hess = lambda w: -poisson_glm.log_joint_hess(y_train.values, x_train.values, weights, w, sigma2) / len(x_train)
+        obj = lambda w: -poisson_glm.log_joint(y_train.values.reshape((-1, 1)), x_train.values, weights, w, sigma2) / len(x_train)
+        obj_grad = lambda w: -poisson_glm.log_joint_grad(y_train.values.reshape((-1, 1)), x_train.values, weights, w, sigma2) / len(x_train)
+        obj_hess = lambda w: -poisson_glm.log_joint_hess(y_train.values.reshape((-1, 1)), x_train.values, weights, w, sigma2) / len(x_train)
 
         w = 0.5 * np.ones(x_train.shape[1])
 
