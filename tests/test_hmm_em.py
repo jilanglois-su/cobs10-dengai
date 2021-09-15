@@ -21,7 +21,7 @@ class TestHmmEm(TestCase):
         cls.mu = np.array([mu1, mu2])
         cls.transition_matrix = np.random.dirichlet([1.] * cls.num_states, size=cls.num_states)
         # generate data
-        cls.num_periods = 300
+        cls.num_periods = 1000
         cls.generate_data(cls.num_periods)
 
         cls.initial_dist = np.ones(cls.num_states) / cls.num_states
@@ -107,22 +107,38 @@ class TestHmmEm(TestCase):
                       'initial_dist': self.initial_dist,
                       'transition_matrix': self.transition_matrix}
         expectations, marginal_ll, transition_expectations = self.model.e_step(self.event_data, parameters)
+        # expectations, transition_expectations = self.view_latent_states()
 
-        self.assertAlmostEqual(first=expectations[0].sum().sum(), second=self.num_periods, places=6)
-        self.assertAlmostEqual(first=transition_expectations[0][0].sum().sum(), second=self.num_periods-1, places=6)
-        self.assertAlmostEqual(first=transition_expectations[0].sum().sum().sum(),
-                               second=self.num_states * (self.num_periods-1), places=6)
+        self.assertAlmostEqual(first=expectations[0].sum(), second=self.num_periods, places=6)
+        self.assertAlmostEqual(first=transition_expectations[0].sum(axis=0).sum(axis=0)[0], second=1, places=6)
+        self.assertAlmostEqual(first=transition_expectations[0].sum(),
+                               second=(self.num_periods-1), places=6)
         self.assertTrue(isinstance(marginal_ll, np.float64))
 
     def test_m_step(self):
         parameters = {'mu': self.mu,
                       'initial_dist': self.initial_dist,
                       'transition_matrix': self.transition_matrix}
-        expectations, marginal_ll, transition_expectations = self.model.e_step(self.event_data, parameters)
+        # expectations, marginal_ll, transition_expectations = self.model.e_step(self.event_data, parameters)
+        expectations, transition_expectations = self.view_latent_states()
         parameters = self.model.m_step(self.event_data, expectations, transition_expectations)
 
         self.assertEqual(parameters['mu'].shape, (self.num_states, self.p))
         self.assertEqual(parameters['transition_matrix'].shape, (self.num_states, self.num_states))
+
+    def view_latent_states(self):
+        expectations = np.zeros((self.num_periods, self.num_states))
+        transition_expectations = np.zeros((self.num_states, self.num_states, self.num_periods - 1))
+        for k in range(self.num_states):
+            mask = self.latent_states == k
+            expectations[mask, k] = 1.
+        expectations = [expectations]
+        for i in range(self.num_states):
+            for j in range(self.num_states):
+                mask = (self.latent_states[1:] == j) & (self.latent_states[:-1] == i)
+                transition_expectations[i, j, mask] = 1.
+        transition_expectations = [transition_expectations]
+        return expectations, transition_expectations
 
     def test_fit_hmm(self):
         lls, parameters = self.model.fit(self.event_data)

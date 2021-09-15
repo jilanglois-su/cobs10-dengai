@@ -144,12 +144,16 @@ class HMM:
             log_expectations_batch = log_expectations_batch - logsumexp(log_expectations_batch, axis=1)[:, np.newaxis]
 
             log_transition_expectation_batch = np.zeros(shape=[self.num_states, self.num_states, num_periods-1])
-            for k1 in range(self.num_states):
-                for k2 in range(self.num_states):
-                    log_transition_expectation_batch[k1, k2, :] = log_alphas[k1][:-1] + log_likelihoods[k1][:-1] + \
-                                                                  log_likelihoods[k2][1:] + log_betas[k2][1:]
+            for i in range(self.num_states):
+                for j in range(self.num_states):
+                    log_alphas_i = log_alphas[:-1, i]
+                    log_likelihoods_i = log_likelihoods[:-1, i]
+                    log_likelihoods_j = log_likelihoods[1:, j]
+                    log_betas_j = log_betas[1:, j]
+                    log_transition_expectation_batch[i, j, :] = log_alphas_i + log_likelihoods_i \
+                                                                + log_likelihoods_j + log_betas_j
             log_transition_expectation_batch = log_transition_expectation_batch \
-                                               - logsumexp(log_transition_expectation_batch, axis=1)[:, np.newaxis, :]
+                                               - logsumexp(log_transition_expectation_batch.reshape((-1, num_periods-1)), axis=0)[np.newaxis, np.newaxis, :]
 
             expectations += [np.exp(log_expectations_batch)]
             transition_expectations += [np.exp(log_transition_expectation_batch)]
@@ -182,7 +186,7 @@ class HMM:
         x_data = np.vstack([event_data['x'][i] for i in range(len(event_data['x']))])
         y_data = np.vstack([event_data['y'][i].reshape((-1, 1)) for i in range(len(event_data['y']))])
         expectations = np.vstack(expectations)
-        transition_expectations = np.vstack(transition_expectations)
+        transition_expectations = np.concatenate(transition_expectations, axis=-1)
         psudo_counts = expectations.sum(axis=0)
         mu = []
         for k in range(self.num_states):
@@ -192,9 +196,9 @@ class HMM:
             mu += [poisson_glm.get_w_map()]
 
         transition_matrix = np.zeros(shape=[self.num_states] * 2)
-        for k1 in range(self.num_states):
-            for k2 in range(self.num_states):
-                transition_matrix[k1, k2] = transition_expectations[k1, k2, :].sum()
+        for i in range(self.num_states):
+            for j in range(self.num_states):
+                transition_matrix[i, j] = transition_expectations[i, j, :].sum()
         transition_matrix = transition_matrix / transition_matrix.sum(axis=1)[:, np.newaxis]
 
         parameters = {'mu': np.array(mu),
@@ -266,7 +270,9 @@ class HMM:
 
 
 if __name__ == "__main__":
+    import os
     from src.d01_data.dengue_data_api import DengueDataApi
+    os.chdir('../')
     dda = DengueDataApi()
     x_train, x_validate, y_train, y_validate = dda.split_data()
     event_data = dict()
@@ -274,3 +280,5 @@ if __name__ == "__main__":
     event_data['x'] = model.format_event_data(x_train)
     event_data['y'] = model.format_event_data(y_train)
     lls_k, parameters_k = model.fit(event_data=event_data)
+    print(lls_k)
+    print(parameters_k)
