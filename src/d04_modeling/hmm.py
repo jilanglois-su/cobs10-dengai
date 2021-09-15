@@ -1,11 +1,16 @@
 import numpy as np
-from sklearn.cluster import KMeans
 from scipy.special import logsumexp
+from scipy.special import gammaln
+from src.d04_modeling.poisson_glm import PoissonGLM
 
 
 class HMM:
-    def __init__(self, num_states):
+    def __init__(self, num_states, alpha=1., sigma2=1.):
         self.num_states = num_states
+        if isinstance(alpha, float):
+            alpha = np.ones(self.num_states) * alpha
+        self.alpha = alpha
+        self.sigma2 = sigma2
 
     @staticmethod
     def forward_pass(initial_dist, transition_matrix, log_likelihoods):
@@ -75,33 +80,24 @@ class HMM:
 
         return log_betas
 
-    @staticmethod
-    def compute_log_likelihoods(data, means, covariances):
-        """Perform the backward pass and return the backward messages for
-          a single "event".
+    def compute_log_likelihoods(self, x_data, y_data, mu, num_periods):
+        """Compute the log likelihood for a single "event".
 
           Parameters
           ---
-          data: (T, 20) array with player positions over time for a particular even
-          means = (K, 20) array with the means b_k
-          covariances = (K, 20, 20) array with the covariances Q_k
+          x_data: (T, p) array with features over time for a particular year
+          y_data: (T, 1) array with counts over time for a particular year
+          mu: (K, p) array with the Poisson GLM coefficients
+          num_periods: T
 
           Returns
           ---
-          log_likelihoods: (T, K) array with entries log p(x_t | z_t=k)
+          log_likelihoods: (T, K) array with entries log p(y_t | x_t, mu, z_t=k)
           """
-        T = data.shape[0]
-        p = data.shape[1]
-        K = means.shape[0]
-        log_likelihoods = np.zeros((T, K))
-        for k in range(K):
-            icov_k = np.linalg.inv(covariances[k, :, :])
-            (sign, logdet) = np.linalg.slogdet(icov_k)
-            x = data.reshape((T, p, 1)) - means[k, :][np.newaxis, :, np.newaxis]
-
-            quadratic_term = np.einsum('...ji,jk,...kl', x, icov_k, x).flatten()
-
-            log_likelihoods[:, k] = - 0.5 * quadratic_term + 0.5 * sign * logdet - 0.5 * p * np.log(2 * np.pi)
+        log_likelihoods = np.zeros((num_periods, self.num_states))
+        for k in range(self.num_states):
+            log_rate_k = np.dot(x_data, mu[k])
+            log_likelihoods[:, k] = y_data * log_rate_k - np.exp(log_rate_k) - gammaln(y_data+1)
 
         return log_likelihoods
 
@@ -127,19 +123,19 @@ class HMM:
         """
         initial_dist = parameters['initial_dist']
         transition_matrix = parameters['transition_matrix']
-        means = parameters['means']
-        covariances = parameters['covariances']
+        mu = parameters['mu']
 
         expectations = []
+        transition_expectations = []
         marginal_ll = 0
         for i in range(len(event_data)):
-            log_likelihoods = self.compute_log_likelihoods(event_data[i], means, covariances)
+            x_data = event_data[i]['x']
+            y_data = event_data[i]['y']
+            num_periods = x_data.shape[0]
+            log_likelihoods = self.compute_log_likelihoods(x_data, y_data, mu, num_periods)
             ll_check = log_likelihoods.sum(axis=0) > 0
             if ll_check.any():
-                p = means.shape[1]
-                new_covariance = self.initialize_covariance(p)
-                covariances[ll_check, :, :] = new_covariance[ll_check, :, :]
-                log_likelihoods = self.compute_log_likelihoods(event_data[i], means, covariances)
+                raise Exception("Positive loglikelihoods!")
 
             log_alphas = self.forward_pass(initial_dist, transition_matrix, log_likelihoods)
             log_betas = self.backward_pass(transition_matrix, log_likelihoods)
@@ -147,12 +143,21 @@ class HMM:
             log_expectations_batch = log_alphas + log_likelihoods + log_betas
             log_expectations_batch = log_expectations_batch - logsumexp(log_expectations_batch, axis=1)[:, np.newaxis]
 
+            log_transition_expectation_batch = np.zeros(shape=[self.num_states, self.num_states, num_periods-1])
+            for k1 in range(self.num_states):
+                for k2 in range(self.num_states):
+                    log_transition_expectation_batch[k1, k2, :] = log_alphas[k1][:-1] + log_likelihoods[k1][:-1] + \
+                                                                  log_likelihoods[k2][1:] + log_betas[k2][1:]
+            log_transition_expectation_batch = log_transition_expectation_batch \
+                                               - logsumexp(log_transition_expectation_batch, axis=1)[:, np.newaxis, :]
+
             expectations += [np.exp(log_expectations_batch)]
+            transition_expectations += [np.exp(log_transition_expectation_batch)]
             marginal_ll += self.compute_marginal_ll(log_alphas=log_alphas, log_likelihoods=log_likelihoods)
 
-        return expectations, marginal_ll
+        return expectations, marginal_ll, transition_expectations
 
-    def m_step(self, data, expectations):
+    def m_step(self, event_data, expectations, transition_expectations):
         """Solve for the Gaussian parameters that maximize the expected log
         likelihood.
 
@@ -161,9 +166,11 @@ class HMM:
 
         Parameters
         ----------
-        data: list of (T, 20) arrays with player positions over time for each event
+        event_data: list of (T, 20) arrays with player positions over time for each event
         expectations: list of (T, K) arrays with marginal state probabilities from
             the E step.
+        transition_expectations: list of (K, K, T) arrays with marginal state transition
+        probabilities from the E step
 
         Returns
         -------
@@ -171,25 +178,28 @@ class HMM:
             initial distribution, transition matrix, and Gaussian means and
             covariances.
         """
-        K = expectations[0].shape[1]
-        data = np.vstack(data)
-        expectations = np.vstack(expectations)
-        psudo_counts = expectations.sum(axis=0)
-        means = []
-        covariances = []
-        for k in range(K):
-            t1 = np.dot(data.T, expectations[:, k][:, np.newaxis] * data)
-            t2 = (expectations[:, k][:, np.newaxis] * data).sum(axis=0)
-            t3 = psudo_counts[k]
-            mean_k = t2/t3
-            tt2 = np.einsum('i,j', t2.flatten(), t2.flatten())
-            covariance_k = (t1 - tt2/t3) / psudo_counts[k]
-            means += [mean_k]
-            covariances += [covariance_k]
 
-        parameters = {'means': np.array(means), 'covariances': np.array(covariances),
+        x_data = np.vstack([event_data[i]['x'] for i in range(len(event_data))])
+        y_data = np.vstack([event_data[i]['y'].reshape((-1, 1)) for i in range(len(event_data))])
+        expectations = np.vstack(expectations)
+        transition_expectations = np.vstack(transition_expectations)
+        psudo_counts = expectations.sum(axis=0)
+        mu = []
+        for k in range(self.num_states):
+            poisson_glm = PoissonGLM(x_train=x_data, y_train=y_data, weights=expectations[:, k].reshape((-1, 1)),
+                                     sigma2=self.sigma2, bias=False)
+            poisson_glm.compute_posterior_mode()
+            mu += [poisson_glm.get_w_map()]
+
+        transition_matrix = np.zeros(shape=[self.num_states] * 2)
+        for k1 in range(self.num_states):
+            for k2 in range(self.num_states):
+                transition_matrix[k1, k2] = transition_expectations[k1, k2, :].sum()
+        transition_matrix = transition_matrix / transition_matrix.sum(axis=1)[:, np.newaxis]
+
+        parameters = {'mu': np.array(mu),
                       'initial_dist': psudo_counts / psudo_counts.sum(),
-                      'transition_matrix': self.initial_transition_matrix(K)}
+                      'transition_matrix': transition_matrix}
 
         return parameters
 
@@ -204,14 +214,15 @@ class HMM:
         parameters: the final parameters
         """
 
-        parameters = self.initialization(event_data)
+        p = event_data[0]['x'].shape[1]
+        parameters = self.initialization(p=p)
         lls = []
         improvement = 10
         c = 0
         print("Solving", end="", flush=True)
         while improvement > 1:
-            expectations, marginal_ll = self.e_step(event_data, parameters)
-            parameters = self.m_step(event_data, expectations)
+            expectations, marginal_ll, transition_expectations = self.e_step(event_data, parameters)
+            parameters = self.m_step(event_data, expectations, transition_expectations)
 
             if len(lls) > 0:
                 improvement = marginal_ll - lls[-1]
@@ -232,21 +243,34 @@ class HMM:
 
         return transition_matrix
 
-    def initialization(self, event_data, kmeans_cov=False):
+    def initialization(self, p):
         parameters = dict()
-        data = np.vstack(event_data)
-        p = data.shape[1]
-        kmeans = KMeans(n_clusters=self.num_states).fit(data)
-        parameters['means'] = kmeans.cluster_centers_
-        parameters['covariances'] = self.initialize_covariance(p)
-        if kmeans_cov:
-            latent_states = kmeans.predict(data)
-            for state in range(self.num_states):
-                parameters['covariances'][state, :, :] = np.cov(data[latent_states == state, :].T)
-        parameters['transition_matrix'] = self.initial_transition_matrix(K=self.num_states)
+        parameters['mu'] = np.random.normal(loc=0.0, scale=np.sqrt(self.sigma2), size=(self.num_states, p))
+        transition_matrix = self.initial_transition_matrix(self.num_states)
+        parameters['transition_matrix'] = transition_matrix
         parameters['initial_dist'] = np.ones(self.num_states) / self.num_states
 
         return parameters
 
     def initialize_covariance(self, p):
         return np.tile(625 * np.eye(p), (self.num_states, 1, 1))
+
+    @staticmethod
+    def format_event_data(df):
+        df.sort_values(inplace=True)
+        event_data = []
+        for city in df.index.get_level_values('city').unique():
+            for year in df.loc[city].index.get_level_values('year').unique():
+                event_data.append(df.loc[city].loc[year].values)
+        return event_data
+
+
+if __name__ == "__main__":
+    from src.d01_data.dengue_data_api import DengueDataApi
+    dda = DengueDataApi()
+    x_train, x_validate, y_train, y_validate = dda.split_data()
+    event_data = dict()
+    model = HMM(num_states=3)
+    event_data['x'] = model.format_event_data(x_train)
+    event_data['y'] = model.format_event_data(y_train)
+    lls_k, parameters_k = model.fit(event_data=event_data)

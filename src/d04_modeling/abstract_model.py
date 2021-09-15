@@ -18,10 +18,14 @@ class AbstractModel:
     def get_x_train(self):
         if isinstance(self._x_train, pd.DataFrame):
             return self._x_train.values
+        else:
+            return self._x_train
 
     def get_y_train(self):
         if isinstance(self._y_train, pd.Series):
             return self._y_train.values.reshape((-1, 1))
+        else:
+            return self._y_train
 
     def log_joint(self, y, X, weights):
         raise NotImplementedError
