@@ -128,9 +128,9 @@ class HMM:
         expectations = []
         transition_expectations = []
         marginal_ll = 0
-        for i in range(len(event_data)):
-            x_data = event_data[i]['x']
-            y_data = event_data[i]['y']
+        for i in range(len(event_data['x'])):
+            x_data = event_data['x'][i]
+            y_data = event_data['y'][i]
             num_periods = x_data.shape[0]
             log_likelihoods = self.compute_log_likelihoods(x_data, y_data, mu, num_periods)
             ll_check = log_likelihoods.sum(axis=0) > 0
@@ -179,8 +179,8 @@ class HMM:
             covariances.
         """
 
-        x_data = np.vstack([event_data[i]['x'] for i in range(len(event_data))])
-        y_data = np.vstack([event_data[i]['y'].reshape((-1, 1)) for i in range(len(event_data))])
+        x_data = np.vstack([event_data['x'][i] for i in range(len(event_data['x']))])
+        y_data = np.vstack([event_data['y'][i].reshape((-1, 1)) for i in range(len(event_data['y']))])
         expectations = np.vstack(expectations)
         transition_expectations = np.vstack(transition_expectations)
         psudo_counts = expectations.sum(axis=0)
@@ -214,7 +214,7 @@ class HMM:
         parameters: the final parameters
         """
 
-        p = event_data[0]['x'].shape[1]
+        p = event_data['x'][0].shape[1]
         parameters = self.initialization(p=p)
         lls = []
         improvement = 10
@@ -257,7 +257,7 @@ class HMM:
 
     @staticmethod
     def format_event_data(df):
-        df.sort_values(inplace=True)
+        df.sort_index(inplace=True)
         event_data = []
         for city in df.index.get_level_values('city').unique():
             for year in df.loc[city].index.get_level_values('year').unique():

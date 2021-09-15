@@ -40,22 +40,24 @@ class TestHmmEm(TestCase):
             rate = np.exp(np.dot(x_data[t, :], cls.mu[z]))
             y_data[t] = poisson.rvs(mu=rate)
             latent_states[t] = z
-        cls.data = dict(x=x_data, y=y_data)
+        cls.event_data = dict(x=[x_data], y=[y_data])
         cls.latent_states = latent_states
 
     def test_compute_log_likelihoods(self):
-        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.data['x'], y_data=self.data['y'],
+        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.event_data['x'][0],
+                                                             y_data=self.event_data['y'][0],
                                                              mu=self.mu, num_periods=self.num_periods)
-        rate0 = np.exp(np.dot(self.data['x'], self.mu[0]))
-        log_p0 = poisson.logpmf(k=self.data['y'], mu=rate0)
-        rate1 = np.exp(np.dot(self.data['x'], self.mu[1]))
-        log_p1 = poisson.logpmf(k=self.data['y'], mu=rate1)
+        rate0 = np.exp(np.dot(self.event_data['x'][0], self.mu[0]))
+        log_p0 = poisson.logpmf(k=self.event_data['y'][0], mu=rate0)
+        rate1 = np.exp(np.dot(self.event_data['x'][0], self.mu[1]))
+        log_p1 = poisson.logpmf(k=self.event_data['y'][0], mu=rate1)
 
         self.assertAlmostEqual(log_likelihoods[:, 0].sum(), log_p0.sum())
         self.assertAlmostEqual(log_likelihoods[:, 1].sum(), log_p1.sum())
 
     def test_forward_pass(self):
-        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.data['x'], y_data=self.data['y'],
+        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.event_data['x'][0],
+                                                             y_data=self.event_data['y'][0],
                                                              mu=self.mu, num_periods=self.num_periods)
         log_alphas = self.model.forward_pass(initial_dist=self.initial_dist, transition_matrix=self.transition_matrix,
                                              log_likelihoods=log_likelihoods)
@@ -74,7 +76,8 @@ class TestHmmEm(TestCase):
         self.assertEqual(0, (log_alphas - expected).sum())
 
     def test_backward_pass(self):
-        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.data['x'], y_data=self.data['y'],
+        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.event_data['x'][0],
+                                                             y_data=self.event_data['y'][0],
                                                              mu=self.mu, num_periods=self.num_periods)
         log_betas = self.model.backward_pass(transition_matrix=self.transition_matrix, log_likelihoods=log_likelihoods)
 
@@ -89,7 +92,8 @@ class TestHmmEm(TestCase):
         self.assertEqual(0, (log_betas - expected).sum())
 
     def test_compute_marginal_ll(self):
-        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.data['x'], y_data=self.data['y'],
+        log_likelihoods = self.model.compute_log_likelihoods(x_data=self.event_data['x'][0],
+                                                             y_data=self.event_data['y'][0],
                                                              mu=self.mu, num_periods=self.num_periods)
         log_alphas = self.model.forward_pass(initial_dist=self.initial_dist, transition_matrix=self.transition_matrix,
                                              log_likelihoods=log_likelihoods)
@@ -102,7 +106,7 @@ class TestHmmEm(TestCase):
         parameters = {'mu': self.mu,
                       'initial_dist': self.initial_dist,
                       'transition_matrix': self.transition_matrix}
-        expectations, marginal_ll, transition_expectations = self.model.e_step(list([self.data]), parameters)
+        expectations, marginal_ll, transition_expectations = self.model.e_step(self.event_data, parameters)
 
         self.assertAlmostEqual(first=expectations[0].sum().sum(), second=self.num_periods, places=6)
         self.assertAlmostEqual(first=transition_expectations[0][0].sum().sum(), second=self.num_periods-1, places=6)
@@ -114,14 +118,14 @@ class TestHmmEm(TestCase):
         parameters = {'mu': self.mu,
                       'initial_dist': self.initial_dist,
                       'transition_matrix': self.transition_matrix}
-        expectations, marginal_ll, transition_expectations = self.model.e_step(list([self.data]), parameters)
-        parameters = self.model.m_step(list([self.data]), expectations, transition_expectations)
+        expectations, marginal_ll, transition_expectations = self.model.e_step(self.event_data, parameters)
+        parameters = self.model.m_step(self.event_data, expectations, transition_expectations)
 
         self.assertEqual(parameters['mu'].shape, (self.num_states, self.p))
         self.assertEqual(parameters['transition_matrix'].shape, (self.num_states, self.num_states))
 
     def test_fit_hmm(self):
-        lls, parameters = self.model.fit([self.data])
+        lls, parameters = self.model.fit(self.event_data)
 
         lls = np.diff(lls)
 
