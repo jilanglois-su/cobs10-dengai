@@ -151,7 +151,9 @@ class HMM:
                     log_likelihoods_j = log_likelihoods[1:, j]
                     log_betas_j = log_betas[1:, j]
                     log_transition_expectation_batch[i, j, :] = log_alphas_i + log_likelihoods_i \
+                                                                + np.log(transition_matrix[i, j]) \
                                                                 + log_likelihoods_j + log_betas_j
+
             log_transition_expectation_batch = log_transition_expectation_batch \
                                                - logsumexp(log_transition_expectation_batch.reshape((-1, num_periods-1)), axis=0)[np.newaxis, np.newaxis, :]
 
