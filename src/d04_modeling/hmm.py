@@ -185,9 +185,7 @@ class HMM:
             covariances.
         """
 
-        x_data = np.vstack([event_data['x'][i] for i in range(len(event_data['x']))])
-        y_data = np.vstack([event_data['y'][i].reshape((-1, 1)) for i in range(len(event_data['y']))])
-        expectations = np.vstack(expectations)
+        expectations, x_data, y_data = self.glm_inputs_setup(event_data, expectations)
         transition_expectations = np.concatenate(transition_expectations, axis=-1)
         psudo_counts = expectations.sum(axis=0)
         mu = []
@@ -270,6 +268,27 @@ class HMM:
                 event_data.append(df.loc[city].loc[year].values)
         return event_data
 
+    def validate_model(self, event_data, parameters):
+        mu = parameters['mu']
+        expectations, marginal_ll, _ = self.e_step(event_data, parameters)
+        expectations, x_data, y_data = self.glm_inputs_setup(event_data, expectations)
+        y_hat = np.zeros(y_data.shape)
+        for k in range(self.num_states):
+            poisson_glm = PoissonGLM(x_train=x_data, y_train=y_data, weights=expectations[:, k].reshape((-1, 1)),
+                                     sigma2=self.sigma2, bias=False)
+
+            y_hat += poisson_glm.obs_map(mu[k], x_validate) * expectations[:, k].reshape((-1, 1))
+        e = np.abs(y_data - y_hat)
+        mae = e.mean()
+
+        return marginal_ll, mae
+
+    def glm_inputs_setup(self, event_data, expectations):
+        x_data = np.vstack([event_data['x'][i] for i in range(len(event_data['x']))])
+        y_data = np.vstack([event_data['y'][i].reshape((-1, 1)) for i in range(len(event_data['y']))])
+        expectations = np.vstack(expectations)
+        return expectations, x_data, y_data
+
 
 if __name__ == "__main__":
     import os
@@ -284,3 +303,12 @@ if __name__ == "__main__":
     lls_k, parameters_k = model.fit(event_data=event_data)
     print(lls_k)
     print(parameters_k)
+
+    event_data_validate = dict()
+    event_data_validate['x'] = model.format_event_data(x_validate)
+    event_data_validate['y'] = model.format_event_data(y_validate)
+
+    marginal_ll, mae = model.validate_model(event_data=event_data_validate, parameters=parameters_k)
+
+    print(mae)
+

@@ -93,7 +93,7 @@ class PoissonGLM(AbstractModel):
         return posterior_predictive_distribution
 
     def obs_map(self, w, X):
-        return np.floor(np.dot(X, w).reshape((-1, 1)))
+        return np.exp(np.floor(np.dot(X, w).reshape((-1, 1))))
 
 
 if __name__ == "__main__":
@@ -110,7 +110,8 @@ if __name__ == "__main__":
     _, w_hist = poisson_glm.compute_posterior_mode()
     w_hist_df = pd.DataFrame(w_hist, columns=x_train.columns)
     weights = np.ones(len(x_train)).reshape((-1, 1))
-    w_hist_df['log_joint'] = w_hist_df.apply(lambda w: poisson_glm.log_joint(y_train, x_train, weights,
+    w_hist_df['log_joint'] = w_hist_df.apply(lambda w: poisson_glm.log_joint(y_train.values.reshape((-1,1)),
+                                                                             x_train.values, weights,
                                                                              w.values, sigma2), axis=1)
     w_hist_df.name = 'iter'
     axs1 = sns.lineplot(data=w_hist_df.iloc[1:].reset_index(), x="index", y="log_joint")
