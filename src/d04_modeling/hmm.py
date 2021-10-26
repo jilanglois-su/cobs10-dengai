@@ -277,7 +277,7 @@ class HMM:
             poisson_glm = PoissonGLM(x_train=x_data, y_train=y_data, weights=expectations[:, k].reshape((-1, 1)),
                                      sigma2=self.sigma2, bias=False)
 
-            y_hat += poisson_glm.obs_map(mu[k], x_validate) * expectations[:, k].reshape((-1, 1))
+            y_hat += poisson_glm.obs_map(mu[k], x_data) * expectations[:, k].reshape((-1, 1))
         e = np.abs(y_data - y_hat)
         mae = e.mean()
 
