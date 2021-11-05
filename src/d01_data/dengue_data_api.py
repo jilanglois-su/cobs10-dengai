@@ -79,6 +79,17 @@ class DengueDataApi:
 
         return x_train, x_validate, y_train, y_validate
 
+    @staticmethod
+    def get_svd(x_train, x_validate, num_components=4):
+        u, s, vh = np.linalg.svd(x_train, full_matrices=True)
+        new_features = ["pc%i" % i for i in range(num_components)]
+        z_train = pd.DataFrame(np.dot(x_train, vh[:num_components, :].T), columns=new_features, index=x_train.index)
+        z_validate = pd.DataFrame(np.dot(x_validate, vh[:num_components, :].T), columns=new_features,
+                                  index=x_validate.index)
+        var = np.power(s, 2)
+        pct_var = (var[:num_components] / var.sum()).sum()
+        return z_train, z_validate, pct_var
+
 
 if __name__ == "__main__":
     os.chdir('../')
