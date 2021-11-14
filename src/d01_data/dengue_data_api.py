@@ -24,7 +24,7 @@ INDEX_COLS = ['city', 'year', 'weekofyear']
 
 class DengueDataApi:
 
-    def __init__(self):
+    def __init__(self, interpolate=True):
         features_train = pd.read_csv(DATA_RAW + "dengue_features_train.csv", index_col=INDEX_COLS).sort_index()
         features_train[WEEK_START_DATE_COL] = pd.to_datetime(features_train[WEEK_START_DATE_COL])
         features_test = pd.read_csv(DATA_RAW + "dengue_features_test.csv", index_col=INDEX_COLS).sort_index()
@@ -51,9 +51,12 @@ class DengueDataApi:
         self.__features_train = features_train
         self.__features_test = features_test
         self.__labels_train = labels_train
+        x_train = self.__features_train[FEATURE_COLS].copy()
+        x_test = self.__features_test[FEATURE_COLS].copy()
         # handle missing values
-        x_train = self.__features_train[FEATURE_COLS].interpolate()
-        x_test = self.__features_test[FEATURE_COLS].interpolate()
+        if interpolate:
+            x_train = x_train.interpolate()
+            x_test = x_test.interpolate()
         # transform variables
         x_train[LOG_TRANSFORM] = x_train[LOG_TRANSFORM].apply(lambda x: np.log(x+1))
         x_test[LOG_TRANSFORM] = x_test[LOG_TRANSFORM].apply(lambda x: np.log(x+1))
@@ -70,6 +73,9 @@ class DengueDataApi:
 
     def get_labels_train(self):
         return self.__labels_train.copy()
+
+    def get_features_test(self):
+        return self.__features_test.copy()
 
     def get_x_data(self):
         return self.__x_data.copy()

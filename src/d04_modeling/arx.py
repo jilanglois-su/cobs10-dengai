@@ -1,11 +1,11 @@
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
-from src.d04_modeling.abstract_model import AbstractModel
+from src.d04_modeling.abstract_sm import AbstractSM
 import matplotlib.pyplot as plt
 
 
-class ARX(AbstractModel):
+class ARX(AbstractSM):
     def __init__(self, x_train, y_train, p=None):
         """
         :param x_train: covariate data
@@ -18,6 +18,8 @@ class ARX(AbstractModel):
         self.__res = dict()
         self.__model = dict()
         self.__cities = x_train.index.get_level_values('city').unique()
+        self.__last_obs_t = dict()
+        self.__target_name = y_train.name
 
     def get_model(self, city):
         return self.__model[city]
@@ -36,8 +38,8 @@ class ARX(AbstractModel):
                 self.__res[city] = model.fit()
         else:
             for city in self.__cities:
-                # TODO: Alternative interpolation methods?
                 endog, exog = self.format_data_arimax(x_train.loc[city], y_train.loc[city])
+                self.__last_obs_t[city] = endog.index[-1]
                 self.__model[city] = sm.tsa.statespace.SARIMAX(endog=endog, exog=exog, order=(self.__p, 0, 0))
                 self.__res[city] = self.__model[city].fit(disp=False, maxiter=100)
                 # print(res_arx[city].summary())
@@ -46,7 +48,7 @@ class ARX(AbstractModel):
         fig, ax = plt.subplots(ncols=2, figsize=(16, 6))
         c = 0
         for city in self.__cities:
-            y_hat = self.predict(city, x_data, y_data)
+            y_hat = self.predict(city, x_data)
             plot_data = self.resample(y_data.loc[city]).to_frame()
             plot_data['prediction'] = y_hat
             t = plot_data.index
@@ -60,42 +62,28 @@ class ARX(AbstractModel):
         mae = 0
         n = 0
         for city in self.__cities:
-            y_hat = self.predict(city, x_data, y_data)
+            y_hat = self.predict(city, x_data)
             y = self.resample(y_data.loc[city])
             mae += (y-y_hat).abs().sum()
             n += len(y)
         return mae / n
 
-    def predict(self, city, x_data, y_data):
+    def predict(self, city, x_data):
+        y_data = pd.Series(np.nan, index=x_data.index, name=self.__target_name)
         endog, exog = self.format_data_arimax(x_data.loc[city], y_data.loc[city])
         if self.__p is None:
             y_log_hat = self.__res[city].predict(exog)
         else:
-            res = self.__res[city].apply(endog=endog, exog=exog)
-            y_log_hat = res.predict()
+            if endog.index[0] > self.__last_obs_t[city]:
+                res = self.__res[city].extend(endog=endog, exog=exog)
+                y_log_hat = res.predict()
+            else:
+                y_log_hat = self.__res[city].predict().reindex(endog.index)
         return self.inv_transform_endog(y_log_hat)
-
-    def format_data_arimax(self, x_data, y_data):
-        endog = self.resample(self.transform_endog(y_data))
-        self.add_constant(x_data)
-        exog = self.resample(x_data)
-        return endog, exog
-
-    @staticmethod
-    def transform_endog(y_data):
-        return np.log(y_data + 1)
-
-    @staticmethod
-    def inv_transform_endog(log_y_data):
-        return np.exp(log_y_data) - 1
-
-    @staticmethod
-    def resample(df):
-        return df.droplevel('year').resample('W-SUN').median().interpolate()
 
     def get_residuals(self, city, x_data, y_data):
         y_log = self.transform_endog(self.resample(y_data.loc[city]))
-        y_log_hat = self.transform_endog(self.predict(city, x_data, y_data))
+        y_log_hat = self.transform_endog(self.predict(city, x_data))
         residuals = y_log - y_log_hat
         return residuals
 

@@ -1,10 +1,12 @@
+from abc import ABC
+
 import pandas as pd
 import numpy as np
 from src.d04_modeling.abstract_model import AbstractModel, BIAS_COL
 import matplotlib.pyplot as plt
 
 
-class AbstractGLM(AbstractModel):
+class AbstractGLM(AbstractModel, ABC):
     def __init__(self, x_train, y_train, bias=True):
         """
         :param x_train: covariate data

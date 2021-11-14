@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 BIAS_COL = 'const'
 
@@ -47,6 +48,6 @@ class AbstractModel:
     def fit(self):
         raise NotImplementedError
 
-    def predict(self, city, x_data, y_data):
+    def predict(self, city, x_data):
         raise NotImplementedError
 
