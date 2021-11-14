@@ -1,12 +1,12 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
-from src.d04_modeling.abstract_model import AbstractModel
+from src.d04_modeling.abstract_glm import AbstractGLM
 from tqdm import tqdm
 from scipy.stats import poisson
 
 
-class PoissonGLM(AbstractModel):
+class PoissonGLM(AbstractGLM):
 
     def __init__(self, x_train, y_train, sigma2, weights=None, bias=True):
         """
@@ -93,7 +93,7 @@ class PoissonGLM(AbstractModel):
         return posterior_predictive_distribution
 
     def obs_map(self, w, X):
-        return np.exp(np.floor(np.dot(X, w).reshape((-1, 1))))
+        return np.floor(np.exp(np.dot(X, w).reshape((-1, 1))))
 
 
 if __name__ == "__main__":

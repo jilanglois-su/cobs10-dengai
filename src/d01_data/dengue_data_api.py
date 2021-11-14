@@ -1,17 +1,23 @@
 import pandas as pd
 import numpy as np
+from datetime import timedelta
 import os
 
 DATA_RAW = "../data/01_raw/"
 
-FEATURE_COLS = ['ndvi_ne', 'ndvi_nw', 'ndvi_se', 'ndvi_sw', 'precipitation_amt_mm',
-                'reanalysis_air_temp_k', 'reanalysis_avg_temp_k',
-                'reanalysis_dew_point_temp_k', 'reanalysis_max_air_temp_k',
-                'reanalysis_min_air_temp_k', 'reanalysis_precip_amt_kg_per_m2',
-                'reanalysis_relative_humidity_percent', 'reanalysis_sat_precip_amt_mm',
-                'reanalysis_specific_humidity_g_per_kg', 'reanalysis_tdtr_k',
-                'station_avg_temp_c', 'station_diur_temp_rng_c', 'station_max_temp_c',
-                'station_min_temp_c', 'station_precip_mm']
+NDVI_COLS = ['ndvi_ne', 'ndvi_nw', 'ndvi_se', 'ndvi_sw']
+PERSIANN_COLS = ['precipitation_amt_mm']
+NOAA_NCEP_COLS = ['reanalysis_air_temp_k', 'reanalysis_avg_temp_k',
+                  'reanalysis_dew_point_temp_k', 'reanalysis_max_air_temp_k',
+                  'reanalysis_min_air_temp_k', 'reanalysis_precip_amt_kg_per_m2',
+                  'reanalysis_relative_humidity_percent', 'reanalysis_sat_precip_amt_mm',
+                  'reanalysis_specific_humidity_g_per_kg', 'reanalysis_tdtr_k']
+NOAA_GHCN_COLS = ['station_avg_temp_c', 'station_diur_temp_rng_c', 'station_max_temp_c',
+                  'station_min_temp_c', 'station_precip_mm']
+
+LOG_TRANSFORM = ['reanalysis_precip_amt_kg_per_m2']
+
+FEATURE_COLS = NDVI_COLS + NOAA_NCEP_COLS + NOAA_GHCN_COLS
 WEEK_START_DATE_COL = 'week_start_date'
 INDEX_COLS = ['city', 'year', 'weekofyear']
 
@@ -19,12 +25,39 @@ INDEX_COLS = ['city', 'year', 'weekofyear']
 class DengueDataApi:
 
     def __init__(self):
-        self.__features_train = pd.read_csv(DATA_RAW + "dengue_features_train.csv", index_col=INDEX_COLS)
-        self.__features_test = pd.read_csv(DATA_RAW + "dengue_features_test.csv", index_col=INDEX_COLS)
-        self.__labels_train = pd.read_csv(DATA_RAW + "dengue_labels_train.csv", index_col=INDEX_COLS)
+        features_train = pd.read_csv(DATA_RAW + "dengue_features_train.csv", index_col=INDEX_COLS).sort_index()
+        features_train[WEEK_START_DATE_COL] = pd.to_datetime(features_train[WEEK_START_DATE_COL])
+        features_test = pd.read_csv(DATA_RAW + "dengue_features_test.csv", index_col=INDEX_COLS).sort_index()
+        features_test[WEEK_START_DATE_COL] = pd.to_datetime(features_test[WEEK_START_DATE_COL])
+        labels_train = pd.read_csv(DATA_RAW + "dengue_labels_train.csv", index_col=INDEX_COLS).sort_index()
+
+        for features_data in [features_test, features_train]:
+            for city in features_data.index.get_level_values('city').unique():
+                for year in features_data.loc[city].index.get_level_values('year').unique():
+                    city_year_data = features_data.loc[city].loc[year]
+                    second_to_last_date = city_year_data[WEEK_START_DATE_COL].iloc[-2]
+                    last_date = city_year_data[WEEK_START_DATE_COL].iloc[-1]
+                    if second_to_last_date > last_date:
+                        key = (city, year, city_year_data.index[-1])
+                        features_data.at[key, WEEK_START_DATE_COL] = second_to_last_date + timedelta(weeks=1)
+
+        labels_train = labels_train.reindex(features_train.index)
+        features_train.reset_index(inplace=True)
+        features_train.set_index(['city', 'year', WEEK_START_DATE_COL], inplace=True)
+        features_test.reset_index(inplace=True)
+        features_test.set_index(['city', 'year', WEEK_START_DATE_COL], inplace=True)
+        labels_train.index = features_train.index
+
+        self.__features_train = features_train
+        self.__features_test = features_test
+        self.__labels_train = labels_train
         # handle missing values
         x_train = self.__features_train[FEATURE_COLS].interpolate()
         x_test = self.__features_test[FEATURE_COLS].interpolate()
+        # transform variables
+        x_train[LOG_TRANSFORM] = x_train[LOG_TRANSFORM].apply(lambda x: np.log(x+1))
+        x_test[LOG_TRANSFORM] = x_test[LOG_TRANSFORM].apply(lambda x: np.log(x+1))
+
         # normalize covariates
         self.__x_mean = x_train.mean()
         self.__x_std = x_train.std()
@@ -33,7 +66,10 @@ class DengueDataApi:
         self.__y_data = self.__labels_train['total_cases'].interpolate()
 
     def get_features_train(self):
-        return self.__features_train
+        return self.__features_train.copy()
+
+    def get_labels_train(self):
+        return self.__labels_train.copy()
 
     def get_x_data(self):
         return self.__x_data.copy()
@@ -54,7 +90,7 @@ class DengueDataApi:
                     x_data[col].loc[city].loc[year].loc[interpolated_data.index] = interpolated_data.values
         return x_data
 
-    def split_data(self, train_ratio=0.7, seed=1992):
+    def split_data(self, train_ratio=0.7, seed=1992, random=True):
         x_train = []
         y_train = []
         x_validate = []
@@ -65,7 +101,10 @@ class DengueDataApi:
         for city in self.__y_data.index.get_level_values('city').unique():
             year_values = self.__y_data.loc[city].index.get_level_values('year').unique()
             n_train = int(train_ratio * len(year_values))
-            train_years = pd.Index(np.random.choice(year_values, n_train, replace=False), name=year_values.name)
+            if random:
+                train_years = pd.Index(np.random.choice(year_values, n_train, replace=False), name=year_values.name)
+            else:
+                train_years = pd.Index(year_values[:n_train], name=year_values.name)
             validate_years = year_values.difference(train_years)
             x_train += [self.__x_data.loc[idx[city, train_years, :]]]
             x_validate += [self.__x_data.loc[idx[city, validate_years, :]]]
