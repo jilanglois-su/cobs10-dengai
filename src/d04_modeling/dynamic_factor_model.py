@@ -29,7 +29,7 @@ class DynamicFactorModel(AbstractSM):
             # Create a dynamic factor model
             self._model[city] = sm.tsa.DynamicFactorMQ(endog,
                                                        factors=self.__factors,
-                                                       factor_order=self.__factor_orders)
+                                                       factor_orders=self.__factor_orders)
             # Note that mod_dfm is an instance of the DynamicFactorMQ class
 
             # Fit the model via maximum likelihood, using the EM algorithm
@@ -48,3 +48,18 @@ class DynamicFactorModel(AbstractSM):
         else:
             y_log_hat = self._res[city].predict().reindex(endog.index)[self._target_name]
         return self.inv_transform_endog(y_log_hat)
+
+
+if __name__ == "__main__":
+    import os
+    from src.d01_data.dengue_data_api import DengueDataApi
+    os.chdir('../')
+    dda = DengueDataApi(interpolate=False)
+    x1, x2, y1, y2 = dda.split_data(random=False)
+
+    dfm_model = DynamicFactorModel(x1.copy(), y1.copy(), factors=3, factor_orders=3)
+    dfm_model.fit()
+
+    city = 'sj'
+    res_dfm = dfm_model.get_model_results(city)
+    print(res_dfm.summary())
