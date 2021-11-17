@@ -5,7 +5,7 @@ from src.d04_modeling.abstract_sm import AbstractSM
 
 
 class ARX(AbstractSM):
-    def __init__(self, x_train, y_train, p=None):
+    def __init__(self, x_train, y_train, p=None, d=0):
         """
         :param x_train: covariate data
         :param y_train: outcome data
@@ -14,6 +14,7 @@ class ARX(AbstractSM):
         super(ARX, self).__init__(x_train=x_train, y_train=y_train, bias=True)
         self._num_rows = len(x_train)
         self.__p = p
+        self.__d = d
 
     def fit(self):
         x_train = self.get_x_train(values=False)
@@ -28,7 +29,7 @@ class ARX(AbstractSM):
             for city in self._cities:
                 endog, exog = self.format_data_arimax(x_train.loc[city], y_train.loc[city])
                 self._last_obs_t[city] = endog.index[-1]
-                self._model[city] = sm.tsa.statespace.SARIMAX(endog=endog, exog=exog, order=(self.__p, 0, 0))
+                self._model[city] = sm.tsa.statespace.SARIMAX(endog=endog, exog=exog, order=(self.__p, self.__d, 0))
                 self._res[city] = self._model[city].fit(disp=False, maxiter=100)
                 # print(res_arx[city].summary())
 
@@ -43,6 +44,30 @@ class ARX(AbstractSM):
                 y_log_hat = res.predict()
             else:
                 y_log_hat = self._res[city].predict().reindex(endog.index)
+        return self.inv_transform_endog(y_log_hat)
+
+    def forecast(self, city, x_data, y_data, m):
+        endog, exog = self.format_data_arimax(x_data.loc[city], y_data.loc[city])
+        if self.__p is None:
+            raise Exception("Cant forecast with static model")
+        else:
+            res = self._res[city]
+            y_log_hat = []
+            i = 0
+            for i in range(len(endog.index)-m):
+                forecast = res.get_forecast(m, exog=exog.iloc[i:i+8])
+                y_log_hat_m = forecast.conf_int(alpha=0.05)
+                y_log_hat_m['total_cases'] = forecast.predicted_mean
+                # we are just interested in the last value
+                y_log_hat += [y_log_hat_m.iloc[-1].T]
+                res = res.extend(endog.iloc[[i]], exog.iloc[[i]])
+            forecast = res.get_forecast(m, exog=exog.iloc[i+1:])
+            y_log_hat_m = forecast.conf_int(alpha=0.05)
+            y_log_hat_m['total_cases'] = forecast.predicted_mean
+            # we are just interested in the last value
+            y_log_hat += [y_log_hat_m.iloc[-1].T]
+
+            y_log_hat = pd.concat(y_log_hat, axis=1).T
         return self.inv_transform_endog(y_log_hat)
 
 
@@ -67,4 +92,6 @@ if __name__ == "__main__":
     arx_model.analyze_residuals(z1, y1)
     print(arx_model.insample_model_evaluation())
     print("MAE ARX: %.4f" % arx_model.get_mae(z2, y2))
+
+    arx_model.plot_forecast(z2, y2, m=8)
 

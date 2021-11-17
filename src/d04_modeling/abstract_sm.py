@@ -62,6 +62,25 @@ class AbstractSM(AbstractModel, ABC):
             c += 1
         plt.show()
 
+    def plot_forecast(self, x_data, y_data, m=8):
+        fig, ax = plt.subplots(ncols=2, figsize=(16, 6))
+        c = 0
+        for city in self._cities:
+            y_hat = self.forecast(city, x_data, y_data, m)
+            plot_data = self.resample(y_data.loc[city]).to_frame()
+            plot_data['prediction'] = y_hat[self._target_name]
+            plot_data['lower_bound'] = y_hat['lower ' + self._target_name]
+            plot_data['upper_bound'] = y_hat['upper ' + self._target_name]
+            t = plot_data.index
+            ax[c].plot(t, plot_data['total_cases'])
+            ax[c].plot(t, plot_data['prediction'])
+            ax[c].fill_between(t, plot_data['lower_bound'],
+                            plot_data['upper_bound'],
+                            facecolor='orange', alpha=0.5)
+            ax[c].set_title(city)
+            c += 1
+        plt.show()
+
     def get_residuals(self, city, x_data, y_data):
         y_log = self.transform_endog(self.resample(y_data.loc[city]))
         y_log_hat = self.transform_endog(self.predict(city, x_data))

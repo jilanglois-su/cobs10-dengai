@@ -50,3 +50,6 @@ class AbstractModel:
     def predict(self, city, x_data):
         raise NotImplementedError
 
+    def forecast(self, city, x_data, y_data, m):
+        raise NotImplementedError
+
