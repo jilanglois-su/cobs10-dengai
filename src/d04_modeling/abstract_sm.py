@@ -20,6 +20,9 @@ class AbstractSM(AbstractModel, ABC):
         self._last_obs_t = dict()
         self._target_name = y_train.name
 
+    def get_cities(self):
+        return self._cities
+
     def get_model(self, city):
         return self._model[city]
 
@@ -111,11 +114,14 @@ class AbstractSM(AbstractModel, ABC):
 
         return model_evaluation
 
-    def get_mae(self, x_data, y_data):
+    def get_mae(self, x_data, y_data, m=None):
         mae = 0
         n = 0
         for city in self._cities:
-            y_hat = self.predict(city, x_data)
+            if m is None:
+                y_hat = self.predict(city, x_data)
+            else:
+                y_hat = self.forecast(city, x_data, y_data, m)[self._target_name]
             y = self.resample(y_data.loc[city])
             mae += (y-y_hat).abs().sum()
             n += len(y)
