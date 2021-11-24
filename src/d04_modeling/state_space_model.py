@@ -142,9 +142,9 @@ class StateSpaceModel(sm.tsa.statespace.MLEModel, ABC):
         phi1 = np.eye(self._factors_x)
         factors_coeff = params_arx.values[:self._factors_x].reshape(1, -1)
         ar_coeff = params_arx.values[self._factors_x:-1].reshape(1, -1)
-        phi2 = np.vstack([factors_coeff, np.zeros((self._factors_x - 1, self._factors_x))])
+        phi2 = np.vstack([factors_coeff, np.zeros((self._factors_y - 1, self._factors_x))])
         phi3 = np.vstack([ar_coeff, np.eye(self._factors_y)[:-1, :]])
-        transition = np.vstack([np.hstack([phi1, np.zeros((self._factors_y, self._factors_y))]),
+        transition = np.vstack([np.hstack([phi1, np.zeros((self._factors_x, self._factors_y))]),
                                 np.hstack([phi2, phi3])])
 
         a1 = vh[:, :self._factors_x]

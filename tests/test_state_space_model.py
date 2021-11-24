@@ -14,7 +14,7 @@ class TestStateSpaceModel(TestCase):
         for city in abstract_model._cities:
             endog, exog = abstract_model.format_data_arimax(x1.loc[city], y1.loc[city], interpolate=False)
             endog = pd.concat([exog, endog.to_frame()], axis=1)
-            model = StateSpaceModel(endog=endog, factors_x=3, factors_y=3)
+            model = StateSpaceModel(endog=endog, factors_x=5, factors_y=3)
             model.update(model.start_params)
             design, obs_cov, state_cov, transition = model.generate_start_matrices()
             self.assertTrue((transition == model.ssm['transition']).all().all(), msg='transition update error')
