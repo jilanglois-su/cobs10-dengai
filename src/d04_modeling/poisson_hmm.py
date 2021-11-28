@@ -4,13 +4,29 @@ from scipy.special import gammaln
 from src.d04_modeling.poisson_glm import PoissonGLM
 
 
-class HMM:
+class PoissonHMM:
     def __init__(self, num_states, alpha=1., sigma2=1.):
         self.num_states = num_states
         if isinstance(alpha, float):
             alpha = np.ones(self.num_states) * alpha
         self.alpha = alpha
         self.sigma2 = sigma2
+
+    @staticmethod
+    def initial_transition_matrix(K, e=0.05):
+        transition_matrix = np.ones((K, K)) * e / (K - 1)
+        np.fill_diagonal(transition_matrix, 1. - e)
+
+        return transition_matrix
+
+    def initialization(self, p):
+        parameters = dict()
+        parameters['mu'] = np.random.normal(loc=0.0, scale=np.sqrt(self.sigma2), size=(self.num_states, p))
+        transition_matrix = self.initial_transition_matrix(self.num_states)
+        parameters['transition_matrix'] = transition_matrix
+        parameters['initial_dist'] = np.ones(self.num_states) / self.num_states
+
+        return parameters
 
     @staticmethod
     def forward_pass(initial_dist, transition_matrix, log_likelihoods):
@@ -207,6 +223,41 @@ class HMM:
 
         return parameters
 
+    def viterbi(self, event_data, parameters):
+        initial_dist = parameters['initial_dist']
+        transition_matrix = parameters['transition_matrix']
+        mu = parameters['mu']
+
+        most_likely_states = []
+        for i in range(len(event_data['x'])):
+            x_data = event_data['x'][i]
+            y_data = event_data['y'][i]
+            num_periods = x_data.shape[0]
+            log_likelihoods = self.compute_log_likelihoods(x_data, y_data, mu, num_periods)
+            ll_check = log_likelihoods.sum(axis=0) > 0
+            if ll_check.any():
+                raise Exception("Positive loglikelihoods!")
+
+            T, K = log_likelihoods.shape
+            log_mu = np.zeros((T, K))
+            for t in range(1, T):
+                factor = log_mu[T-t, :] + log_likelihoods[T-t, :]
+                log_mu_next = np.max(np.log(transition_matrix) + factor[np.newaxis, :], axis=1)
+                log_mu[T-1-t, :] = log_mu_next
+
+            most_likely_states_batch = [None] * T
+            factor = log_likelihoods[0, :] + log_mu[0]
+            most_likely_states_batch[0] = np.argmax(factor + np.log(initial_dist))
+            for t in range(1, T):
+                factor = log_likelihoods[t, :] + log_mu[t]
+                prev_state = most_likely_states_batch[t-1]
+                log_transition = np.log(transition_matrix[prev_state, :])
+                most_likely_states_batch[t] = np.argmax(factor + log_transition)
+
+            most_likely_states += [most_likely_states_batch]
+
+        return most_likely_states
+
     def fit(self, event_data):
         """Fit an HMM using the EM algorithm above. You'll have to initialize the
         parameters somehow; k-means often works well. You'll also need to monitor
@@ -240,32 +291,61 @@ class HMM:
         print("Done")
         return lls, parameters
 
-    @staticmethod
-    def initial_transition_matrix(K, e=0.05):
-        transition_matrix = np.ones((K, K)) * e / (K - 1)
-        np.fill_diagonal(transition_matrix, 1. - e)
+    def forecast(self, train_event_data, test_event_data, parameters, m=8, num_samples=100):
+        initial_dist = parameters['initial_dist']
+        transition_matrix = parameters['transition_matrix']
+        mu = parameters['mu']
+        state_space = list(range(self.num_states))
+        forecasts = []
+        for i in range(len(train_event_data['x'])):
+            x_train = train_event_data['x'][i]
+            y_train = train_event_data['y'][i]
+            poisson_glm = PoissonGLM(x_train=x_train, y_train=y_train,
+                                     sigma2=self.sigma2, bias=False)
 
-        return transition_matrix
+            x_test = test_event_data['x'][i]
+            y_test = test_event_data['y'][i]
+            num_periods = x_train.shape[0]
+            forecasts_batch = np.zeros((num_periods, num_samples)) + np.nan
+            x_data = x_train.copy()
+            y_data = y_train.copy()
+            print("Solving", end="", flush=True)
+            for t in range(x_test.shape[0]-m):
+                log_likelihoods = self.compute_log_likelihoods(x_data, y_data, mu, num_periods)
+                log_alphas = self.forward_pass(initial_dist, transition_matrix, log_likelihoods)
+                log_filter_prob = log_alphas - logsumexp(log_alphas, axis=1)[:, np.newaxis]
+                initial_dist = np.exp(log_filter_prob[-1, :])
+                for j in range(num_samples):
+                    prev_state = np.random.choice(state_space, p=initial_dist)
+                    next_state = None
+                    path = [prev_state]
+                    for step in range(m):
+                        next_state = np.random.choice(range(self.num_states),
+                                                      p=transition_matrix[prev_state, :])
+                        path += [next_state]
+                        prev_state = next_state
+                    forecasts_batch[t+m, j] = poisson_glm.obs_map(mu[next_state], x_test[m-1, :].reshape(1, -1))
+                print(".", end="", flush=True)
+                num_periods += 1
+                x_data = np.vstack([x_data, x_test[t, :].reshape(1, -1)])
+                y_data = np.append(y_data, y_test[t])
 
-    def initialization(self, p):
-        parameters = dict()
-        parameters['mu'] = np.random.normal(loc=0.0, scale=np.sqrt(self.sigma2), size=(self.num_states, p))
-        transition_matrix = self.initial_transition_matrix(self.num_states)
-        parameters['transition_matrix'] = transition_matrix
-        parameters['initial_dist'] = np.ones(self.num_states) / self.num_states
+            forecasts += [forecasts_batch]
+            print("Done")
 
-        return parameters
+        return forecasts
 
-    def initialize_covariance(self, p):
-        return np.tile(625 * np.eye(p), (self.num_states, 1, 1))
 
     @staticmethod
     def format_event_data(df):
         df.sort_index(inplace=True)
         event_data = []
         for city in df.index.get_level_values('city').unique():
-            for year in df.loc[city].index.get_level_values('year').unique():
-                event_data.append(df.loc[city].loc[year].values)
+            if 'year' in df.index.names:
+                for year in df.loc[city].index.get_level_values('year').unique():
+                    event_data.append(df.loc[city].loc[year].values)
+            else:
+                event_data.append(df.loc[city].values)
         return event_data
 
     def validate_model(self, event_data, parameters):
@@ -296,19 +376,26 @@ if __name__ == "__main__":
     os.chdir('../')
     dda = DengueDataApi()
     x_train, x_validate, y_train, y_validate = dda.split_data()
+    z_train, z_validate, pct_var = dda.get_pca(x_train, x_validate, num_components=4)
+    z_train['bias'] = 1.
+    z_validate['bais'] = 1.
     event_data = dict()
     model = HMM(num_states=3)
-    event_data['x'] = model.format_event_data(x_train)
-    event_data['y'] = model.format_event_data(y_train)
+    event_data['x'] = model.format_event_data(z_train.droplevel('year'))
+    event_data['y'] = model.format_event_data(y_train.droplevel('year'))
     lls_k, parameters_k = model.fit(event_data=event_data)
     print(lls_k)
     print(parameters_k)
 
+    most_likely_states = model.viterbi(event_data=event_data, parameters=parameters_k)
+
     event_data_validate = dict()
-    event_data_validate['x'] = model.format_event_data(x_validate)
-    event_data_validate['y'] = model.format_event_data(y_validate)
+    event_data_validate['x'] = model.format_event_data(z_validate.droplevel('year'))
+    event_data_validate['y'] = model.format_event_data(y_validate.droplevel('year'))
 
-    marginal_ll, mae = model.validate_model(event_data=event_data_validate, parameters=parameters_k)
+    forecasts = model.forecast(event_data, event_data_validate, parameters_k)
 
-    print(mae)
+    # marginal_ll, mae = model.validate_model(event_data=event_data_validate, parameters=parameters_k)
+
+    # print(mae)
 

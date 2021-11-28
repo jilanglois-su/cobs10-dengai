@@ -31,7 +31,7 @@ class CrossValidation:
 
 if __name__ == "__main__":
     from collections import OrderedDict
-    from src.d04_modeling.hmm import HMM
+    from src.d04_modeling.poisson_hmm import HMM
     event_data = []
     folds = 5
     cv = CrossValidation(event_data=event_data, folds=folds)

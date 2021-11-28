@@ -1,7 +1,7 @@
 from unittest import TestCase
 import numpy as np
 from scipy.special import logsumexp
-from src.d04_modeling.hmm import HMM
+from src.d04_modeling.poisson_hmm import HMM
 from scipy.stats import poisson, multivariate_normal
 
 

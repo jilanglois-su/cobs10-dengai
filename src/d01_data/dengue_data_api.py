@@ -17,7 +17,7 @@ NOAA_GHCN_COLS = ['station_avg_temp_c', 'station_diur_temp_rng_c', 'station_max_
 
 LOG_TRANSFORM = ['reanalysis_precip_amt_kg_per_m2']
 
-FEATURE_COLS = NDVI_COLS + NOAA_NCEP_COLS + NOAA_GHCN_COLS
+FEATURE_COLS = NDVI_COLS + NOAA_NCEP_COLS
 WEEK_START_DATE_COL = 'week_start_date'
 INDEX_COLS = ['city', 'year', 'weekofyear']
 
