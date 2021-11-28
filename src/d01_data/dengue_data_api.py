@@ -1,25 +1,9 @@
 import pandas as pd
 import numpy as np
 from datetime import timedelta
+from src.d00_utils.utils import resample2weekly
+from src.d00_utils.constants import *
 import os
-
-DATA_RAW = "../data/01_raw/"
-
-NDVI_COLS = ['ndvi_ne', 'ndvi_nw', 'ndvi_se', 'ndvi_sw']
-PERSIANN_COLS = ['precipitation_amt_mm']
-NOAA_NCEP_COLS = ['reanalysis_air_temp_k', 'reanalysis_avg_temp_k',
-                  'reanalysis_dew_point_temp_k', 'reanalysis_max_air_temp_k',
-                  'reanalysis_min_air_temp_k', 'reanalysis_precip_amt_kg_per_m2',
-                  'reanalysis_relative_humidity_percent', 'reanalysis_sat_precip_amt_mm',
-                  'reanalysis_specific_humidity_g_per_kg', 'reanalysis_tdtr_k']
-NOAA_GHCN_COLS = ['station_avg_temp_c', 'station_diur_temp_rng_c', 'station_max_temp_c',
-                  'station_min_temp_c', 'station_precip_mm']
-
-LOG_TRANSFORM = ['reanalysis_precip_amt_kg_per_m2']
-
-FEATURE_COLS = NDVI_COLS + NOAA_NCEP_COLS
-WEEK_START_DATE_COL = 'week_start_date'
-INDEX_COLS = ['city', 'year', 'weekofyear']
 
 
 class DengueDataApi:
@@ -146,6 +130,32 @@ class DengueDataApi:
         var = np.power(w, 2)
         pct_var = (var[:num_components] / var.sum()).sum()
         return z_train, z_validate, pct_var
+
+    def format_data(self, x_data, y_data, interpolate=True):
+        endog = self.resample(self.transform_endog(y_data), interpolate)
+        for col, diff in diff_variables.items():
+            if col in x_data.columns and diff:
+                x_data[col] = x_data[col].diff()
+                if interpolate:
+                    x_data[col].fillna(value=0)
+
+        exog = self.resample(x_data, interpolate)
+
+        return endog, exog
+
+    @staticmethod
+    def resample(df, interpolate):
+        return resample2weekly(df, interpolate)
+
+    @staticmethod
+    def transform_endog(y_data):
+        return np.log(y_data + 1).diff()
+
+    @staticmethod
+    def inv_transform_endog(dly_data):
+        if np.isnan(dly_data.iloc[0]):
+            dly_data.iat[0] = 0
+        return np.exp(dly_data.cumsum()) - 1
 
 
 if __name__ == "__main__":

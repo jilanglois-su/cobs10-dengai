@@ -2,8 +2,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import signal
-from src.d01_data.dengue_data_api import WEEK_START_DATE_COL
+from src.d00_utils.constants import WEEK_START_DATE_COL
 import statsmodels.api as sm
+from statsmodels.tsa.stattools import kpss, adfuller
 
 
 def get_design_matrix(stim, L):
@@ -54,3 +55,53 @@ def variable_analysis(x_values, col, ylim=None):
     spectral_den = pd.DataFrame(Pxx_den, columns=['power'], index=f)
     spectral_den['t'] = 1./spectral_den.index.to_series()
     return spectral_den.sort_values('power', ascending=False)
+
+
+def resample2weekly(df, interpolate=True):
+    df = df.droplevel('year').resample('W-SUN').median()
+    if interpolate:
+        return df.interpolate()
+    else:
+        return df
+
+
+def kpss_test(timeseries):
+    # print("Results of KPSS Test:")
+    kpsstest = kpss(timeseries, regression="c", nlags="auto")
+    kpss_output = pd.Series(
+        kpsstest[0:3], index=["Test Statistic", "p-value", "Lags Used"]
+    )
+    for key, value in kpsstest[3].items():
+        kpss_output["Critical Value (%s)" % key] = value
+    # print(kpss_output)
+
+    if kpsstest[1] > 0.05:
+        # print("KPSS -> stationary")
+        return True
+    else:
+        # print("KPSS -> non-stationary")
+        return False
+
+
+def adf_test(timeseries):
+    # print("Results of Dickey-Fuller Test:")
+    dftest = adfuller(timeseries, autolag="AIC")
+    dfoutput = pd.Series(
+        dftest[0:4],
+        index=[
+            "Test Statistic",
+            "p-value",
+            "#Lags Used",
+            "Number of Observations Used",
+        ],
+    )
+    for key, value in dftest[4].items():
+        dfoutput["Critical Value (%s)" % key] = value
+    # print(dfoutput)
+
+    if dftest[1] > 0.05:
+        # print("ADF -> non-stationary")
+        return False
+    else:
+        # print("ADF -> stationary")
+        return True

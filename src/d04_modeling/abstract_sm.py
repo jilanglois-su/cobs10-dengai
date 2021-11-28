@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import statsmodels.api as sm
 from src.d04_modeling.abstract_model import AbstractModel
+from src.d00_utils.utils import resample2weekly
 
 
 class AbstractSM(AbstractModel, ABC):
@@ -31,11 +32,7 @@ class AbstractSM(AbstractModel, ABC):
 
     @staticmethod
     def resample(df, interpolate=True):
-        df = df.droplevel('year').resample('W-SUN').median()
-        if interpolate:
-            return df.interpolate()
-        else:
-            return df
+        return resample2weekly(df, interpolate)
 
     def format_data_arimax(self, x_data, y_data, interpolate=True):
         endog = self.resample(self.transform_endog(y_data), interpolate)
