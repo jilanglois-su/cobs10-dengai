@@ -318,10 +318,10 @@ class PoissonHMM:
                 log_alphas = self.forward_pass(initial_dist, transition_matrix, log_likelihoods)
                 log_filter_prob = log_alphas - logsumexp(log_alphas, axis=1)[:, np.newaxis]
                 initial_dist = np.exp(log_filter_prob[-1, :])
-                sample_states = self.sequential_sampling(initial_dist, m, mu, num_samples, state_space,
+                sample_states = self.sequential_sampling(initial_dist, m, num_samples, state_space,
                                                          transition_matrix)
                 sample_mu = mu[sample_states]
-                sampel_forecast = poisson_glm.obs_map(sample_mu.T, x_test[m-1, :])
+                sampel_forecast = poisson_glm.obs_map(sample_mu.T, x_test[t+m-1, :])
                 forecasts_batch[t+m, :] = sampel_forecast.flatten()
                 if t % 10 == 0:
                     print(".", end="", flush=True)
@@ -334,14 +334,14 @@ class PoissonHMM:
 
         return forecasts
 
-    def sequential_sampling(self, initial_dist, m, mu, num_samples, state_space, transition_matrix):
+    def sequential_sampling(self, initial_dist, m, num_samples, state_space, transition_matrix):
         sample_states = []
         for j in range(num_samples):
             next_state = self.sim_m_step_transition(initial_dist, m, state_space, transition_matrix)
             sample_states += [next_state]
         return sample_states
 
-    def parallel_sampling(self, initial_dist, m, mu, num_samples, state_space, transition_matrix):
+    def parallel_sampling(self, initial_dist, m, num_samples, state_space, transition_matrix):
         # Step 1: Init multiprocessing.Pool()
         pool = mp.Pool(cpu_count)
         # Step 2: `pool.apply` the `sim_m_step_transition()`
