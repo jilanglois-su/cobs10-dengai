@@ -1,7 +1,6 @@
 from abc import ABC
 import pandas as pd
 import numpy as np
-from scipy.signal import lfilter
 import statsmodels.api as sm
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
@@ -133,10 +132,11 @@ class StateSpaceModel(sm.tsa.statespace.MLEModel, ABC):
         return np.concatenate((params_obs_cov, params_state_cov, params_phi, params_a))
 
     def generate_start_matrices(self):
-        _exog = pd.DataFrame(self.endog[:, :-1], columns=self._covariates[:-1]).interpolate()
-        _endog = pd.Series(self.endog[:, -1], name=self._covariates[-1]).interpolate()
-        _, _, vh = np.linalg.svd(_exog, full_matrices=True)
-        factors = pd.DataFrame(np.dot(_exog, vh[:self._factors_x, :].T), index=_exog.index)
+        _exog = pd.DataFrame(self.endog[:, :-1], columns=self._covariates[:-1]).interpolate().fillna(0)
+        _endog = pd.Series(self.endog[:, -1], name=self._covariates[-1]).interpolate().fillna(0)
+        cov = _exog.cov()
+        w, v = np.linalg.eig(cov)
+        factors = pd.DataFrame(np.dot(_exog, v[:, :self._factors_x]), index=_exog.index)
         _model = SARIMAX(endog=_endog, exog=factors, order=(self._factors_y, 0, 0))
         res = _model.fit(disp=False, maxiter=100)
         params_arx = res.params
@@ -149,7 +149,7 @@ class StateSpaceModel(sm.tsa.statespace.MLEModel, ABC):
         transition = np.vstack([np.hstack([phi1, np.zeros((self._factors_x, self._factors_y))]),
                                 np.hstack([phi2, phi3])])
 
-        a1 = vh[:, :self._factors_x]
+        a1 = v.T[:, :self._factors_x]
         a2 = np.eye(self._dims_y, self._factors_y)
         design_x = np.hstack([a1, np.zeros((self._dims_x, self._factors_y))])
         design_y = np.hstack([np.zeros((self._dims_y, self._factors_x)), a2])
@@ -186,44 +186,49 @@ if __name__ == "__main__":
     factors_x = 3
     factors_y = 3
     abstract_model = AbstractSM(x_train=x1, y_train=y1, bias=False)
-    for city in abstract_model.get_cities():
-        if city == 'iq':
-            continue
-        endog, exog = abstract_model.format_data_arimax(x1.loc[city], y1.loc[city], interpolate=False)
-        endog = endog.diff()
-        endog = (endog - endog.mean())/endog.std()
+    city = 'sj'
 
-        print("-------------- DFM Model --------------")
-        model_dfmq = sm.tsa.DynamicFactorMQ(exog,
-                                            factors=factors_x,
-                                            factor_orders=1,
-                                            idiosyncratic_ar1=False)
-        results_dfmq = model_dfmq.fit(method='em')
+    endog, exog = dda.format_data(x1.loc[city].copy(), y1.loc[city].copy(), interpolate=False)
 
-        state_names = pd.Index(['f%i' % i for i in range(factors_x)])
-        transition_df = pd.DataFrame(model_dfmq.ssm['transition'], index=state_names, columns=state_names)
-        print(transition_df.round(4).to_string())
-        design_df = pd.DataFrame(model_dfmq.ssm['design'],
-                                 index=exog.columns,
-                                 columns=state_names)
-        print(design_df.round(4).to_string())
+    endog_mean = endog.mean(axis=0)
+    endog_std = endog.std(axis=0)
+    exog_mean = exog.mean(axis=0)
+    exog_std = exog.std(axis=0)
 
-        print("-------------- SSM Model --------------")
+    endog = (endog - endog_mean) / endog_std
+    exog = (exog - exog_mean) / exog_std
 
-        model = StateSpaceModel(endog=endog.diff(), exog=exog, factors_x=factors_x, factors_y=factors_y)
-        model.update(model.start_params)
-        state_names = pd.Index(['f%i' % i for i in range(factors_x)]).append(pd.Index(['z%i' % i for i in range(factors_y)]))
-        transition_df = pd.DataFrame(model.ssm['transition'], index=state_names, columns=state_names)
-        print(transition_df.round(4).to_string())
-        design_df = pd.DataFrame(model.ssm['design'],
-                                 index=exog.columns.append(pd.Index([endog.name])),
-                                 columns=state_names)
-        print(design_df.round(4).to_string())
-        results = model.fit(maxiter=200)
-        transition_df = pd.DataFrame(model.ssm['transition'], index=state_names, columns=state_names)
-        print(transition_df.round(4).to_string())
-        design_df = pd.DataFrame(model.ssm['design'],
-                                 index=exog.columns.append(pd.Index([endog.name])),
-                                 columns=state_names)
-        print(design_df.round(4).to_string())
+    print("-------------- DFM Model --------------")
+    model_dfmq = sm.tsa.DynamicFactorMQ(exog,
+                                        factors=factors_x,
+                                        factor_orders=1,
+                                        idiosyncratic_ar1=False)
+    results_dfmq = model_dfmq.fit(method='em')
+
+    state_names = pd.Index(['f%i' % i for i in range(factors_x)])
+    transition_df = pd.DataFrame(model_dfmq.ssm['transition'], index=state_names, columns=state_names)
+    print(transition_df.round(4).to_string())
+    design_df = pd.DataFrame(model_dfmq.ssm['design'],
+                             index=exog.columns,
+                             columns=state_names)
+    print(design_df.round(4).to_string())
+
+    print("-------------- SSM Model --------------")
+
+    model = StateSpaceModel(endog=endog, exog=exog, factors_x=factors_x, factors_y=factors_y)
+    model.update(model.start_params)
+    state_names = pd.Index(['f%i' % i for i in range(factors_x)]).append(pd.Index(['z%i' % i for i in range(factors_y)]))
+    transition_df = pd.DataFrame(model.ssm['transition'], index=state_names, columns=state_names)
+    print(transition_df.round(4).to_string())
+    design_df = pd.DataFrame(model.ssm['design'],
+                             index=exog.columns.append(pd.Index([endog.name])),
+                             columns=state_names)
+    print(design_df.round(4).to_string())
+    results = model.fit(maxiter=200)
+    transition_df = pd.DataFrame(model.ssm['transition'], index=state_names, columns=state_names)
+    print(transition_df.round(4).to_string())
+    design_df = pd.DataFrame(model.ssm['design'],
+                             index=exog.columns.append(pd.Index([endog.name])),
+                             columns=state_names)
+    print(design_df.round(4).to_string())
 
