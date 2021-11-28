@@ -2,6 +2,9 @@ import numpy as np
 from scipy.special import logsumexp
 from scipy.special import gammaln
 from src.d04_modeling.poisson_glm import PoissonGLM
+import multiprocessing as mp
+
+cpu_count = mp.cpu_count()
 
 
 class PoissonHMM:
@@ -306,35 +309,60 @@ class PoissonHMM:
             x_test = test_event_data['x'][i]
             y_test = test_event_data['y'][i]
             num_periods = x_train.shape[0]
-            forecasts_batch = np.zeros((num_periods, num_samples)) + np.nan
+            forecasts_batch = np.zeros((x_test.shape[0], num_samples)) + np.nan
             x_data = x_train.copy()
             y_data = y_train.copy()
-            print("Solving", end="", flush=True)
+            print("Sampling", end="", flush=True)
             for t in range(x_test.shape[0]-m):
                 log_likelihoods = self.compute_log_likelihoods(x_data, y_data, mu, num_periods)
                 log_alphas = self.forward_pass(initial_dist, transition_matrix, log_likelihoods)
                 log_filter_prob = log_alphas - logsumexp(log_alphas, axis=1)[:, np.newaxis]
                 initial_dist = np.exp(log_filter_prob[-1, :])
-                for j in range(num_samples):
-                    prev_state = np.random.choice(state_space, p=initial_dist)
-                    next_state = None
-                    path = [prev_state]
-                    for step in range(m):
-                        next_state = np.random.choice(range(self.num_states),
-                                                      p=transition_matrix[prev_state, :])
-                        path += [next_state]
-                        prev_state = next_state
-                    forecasts_batch[t+m, j] = poisson_glm.obs_map(mu[next_state], x_test[m-1, :].reshape(1, -1))
-                print(".", end="", flush=True)
+                sample_states = self.sequential_sampling(initial_dist, m, mu, num_samples, state_space,
+                                                         transition_matrix)
+                sample_mu = mu[sample_states]
+                sampel_forecast = poisson_glm.obs_map(sample_mu.T, x_test[m-1, :])
+                forecasts_batch[t+m, :] = sampel_forecast.flatten()
+                if t % 10 == 0:
+                    print(".", end="", flush=True)
                 num_periods += 1
                 x_data = np.vstack([x_data, x_test[t, :].reshape(1, -1)])
                 y_data = np.append(y_data, y_test[t])
 
-            forecasts += [forecasts_batch]
             print("Done")
+            forecasts += [forecasts_batch]
 
         return forecasts
 
+    def sequential_sampling(self, initial_dist, m, mu, num_samples, state_space, transition_matrix):
+        sample_states = []
+        for j in range(num_samples):
+            next_state = self.sim_m_step_transition(initial_dist, m, state_space, transition_matrix)
+            sample_states += [next_state]
+        return sample_states
+
+    def parallel_sampling(self, initial_dist, m, mu, num_samples, state_space, transition_matrix):
+        # Step 1: Init multiprocessing.Pool()
+        pool = mp.Pool(cpu_count)
+        # Step 2: `pool.apply` the `sim_m_step_transition()`
+        sample_args = (initial_dist, m, state_space, transition_matrix)
+        sample_states = [pool.apply(self.sim_m_step_transition,
+                                    args=sample_args) for j in range(num_samples)]
+        # Step 3: Don't forget to close
+        pool.close()
+
+        return sample_states
+
+    def sim_m_step_transition(self, initial_dist, m, state_space, transition_matrix):
+        prev_state = np.random.choice(state_space, p=initial_dist)
+        next_state = None
+        path = [prev_state]
+        for step in range(m):
+            next_state = np.random.choice(range(self.num_states),
+                                          p=transition_matrix[prev_state, :])
+            path += [next_state]
+            prev_state = next_state
+        return next_state
 
     @staticmethod
     def format_event_data(df):
@@ -380,7 +408,7 @@ if __name__ == "__main__":
     z_train['bias'] = 1.
     z_validate['bais'] = 1.
     event_data = dict()
-    model = HMM(num_states=3)
+    model = PoissonHMM(num_states=3)
     event_data['x'] = model.format_event_data(z_train.droplevel('year'))
     event_data['y'] = model.format_event_data(y_train.droplevel('year'))
     lls_k, parameters_k = model.fit(event_data=event_data)
