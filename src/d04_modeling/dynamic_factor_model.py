@@ -129,7 +129,7 @@ if __name__ == "__main__":
     city = 'sj'
     res_dfm = dfm_model.get_model_results(city)
     print(res_dfm.summary())
-    z1, y1_ = dfm_model.get_filtered_factors(city, x1, y1)
+    z1, y1_ = dfm_model.get_filtered_factors(x1, y1)
 
     print(z1.head())
     print(y1_.head())

@@ -135,6 +135,18 @@ class DengueDataApi:
         pct_var = (var[:num_components] / var.sum()).sum()
         return z_train, z_validate, pct_var
 
+    @staticmethod
+    def get_pca(x_train, x_validate, num_components=4):
+        x_cov = x_train.cov()
+        w, v = np.linalg.eig(x_cov)
+        new_features = ["pc%i" % i for i in range(num_components)]
+        z_train = pd.DataFrame(np.dot(x_train, v[:, :num_components]), columns=new_features, index=x_train.index)
+        z_validate = pd.DataFrame(np.dot(x_validate, v[:, :num_components]), columns=new_features,
+                                  index=x_validate.index)
+        var = np.power(w, 2)
+        pct_var = (var[:num_components] / var.sum()).sum()
+        return z_train, z_validate, pct_var
+
 
 if __name__ == "__main__":
     os.chdir('../')
