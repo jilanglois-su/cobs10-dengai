@@ -337,11 +337,10 @@ class PoissonHMM:
         return forecasts
 
     def sequential_sampling(self, initial_dist, m, num_samples, state_space, transition_matrix):
-        sample_states = []
-        for j in range(num_samples):
-            next_state = self.sim_m_step_transition(initial_dist, m, state_space, transition_matrix)
-            sample_states += [next_state]
-        return sample_states
+        m_step_dist = np.dot(np.linalg.matrix_power(transition_matrix.T, m), initial_dist)
+        sample_states = np.random.choice(range(self.num_states), size=num_samples,
+                                          p=m_step_dist)
+        return list(sample_states)
 
     def parallel_sampling(self, initial_dist, m, num_samples, state_space, transition_matrix):
         # Step 1: Init multiprocessing.Pool()
