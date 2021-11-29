@@ -39,6 +39,8 @@ class PoissonHMM:
         In the descriptions below, let K denote the number of discrete states
         and T the number of time steps.
 
+        transition_matrix as defined by STATS 271 lecture: P_{ij}=P(z_t=j \mid z_{t-1}=i)
+
         Parameters
         ---
         initial_dist: (K,) array with initial state probabilities

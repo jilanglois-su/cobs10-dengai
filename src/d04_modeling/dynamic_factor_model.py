@@ -1,8 +1,9 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import statsmodels.api as sm
-from src.d04_modeling.abstract_sm import AbstractSM
+
 from src.d01_data.dengue_data_api import WEEK_START_DATE_COL
+from src.d04_modeling.abstract_sm import AbstractSM
 
 
 class DynamicFactorModel(AbstractSM):
@@ -43,7 +44,7 @@ class DynamicFactorModel(AbstractSM):
             # Note that mod_dfm is an instance of the DynamicFactorMQ class
 
             # Fit the model via maximum likelihood, using the EM algorithm
-            self._res[city] = self._model[city].fit()
+            self._res[city] = self._model[city].fit(method='em', disp=False)
             # Note that res_dfm is an instance of the DynamicFactorMQResults class
 
         return None
