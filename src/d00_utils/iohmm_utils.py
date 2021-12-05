@@ -31,7 +31,7 @@ class StateNetwork(nn.Module):
     Class for implementing state network
     """
     def __init__(self, in_features, num_states, learning_rate=0.001):
-        super().__init__()
+        super(StateNetwork, self).__init__()
         self.lr = learning_rate
         self.network = nn.Linear(in_features=in_features, out_features=num_states)
         self.network.to(device)
@@ -47,7 +47,7 @@ class OutputNetwork(nn.Module):
     Class for implementing Inference Network
     """
     def __init__(self, in_features, out_features, learning_rate=0.001):
-        super().__init__()
+        super(OutputNetwork, self).__init__()
         self.lr = learning_rate
 
         self.network = nn.Linear(in_features=in_features, out_features=out_features)
@@ -59,6 +59,36 @@ class OutputNetwork(nn.Module):
         return output
 
 
+class LinearWithChannel(nn.Module):
+    def __init__(self, input_size, output_size, channel_size):
+        super(LinearWithChannel, self).__init__()
+        self.channel_size = channel_size
+        # initialize weights
+        self.weight = torch.nn.Parameter(torch.zeros(channel_size, input_size, output_size)).to(device)
+        self.bias = torch.nn.Parameter(torch.zeros(channel_size, 1, output_size)).to(device)
+
+        # change weights to kaiming
+        self.reset_parameters(self.weight, self.bias)
+
+    def reset_parameters(self, weights, bias):
+        torch.nn.init.kaiming_uniform_(weights, a=np.sqrt(3))
+        fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(weights)
+        bound = 1 / np.sqrt(fan_in)
+        torch.nn.init.uniform_(bias, -bound, bound)
+
+    def forward(self, observations):
+        """
+        observations = torch.tensor(batch_size, input_size)
+        weight = torch.tensor(channel_size, input_size, output_size)
+        bias = torch.tensor(channel_size, 1, output_size)
+        :param observations:
+        :return: torch.tensor(channel_size, batch_size, output_size)
+        """
+        observations = observations.repeat(self.channel_size, 1, 1)
+        output = torch.bmm(observations, self.weight) + self.bias
+        return output
+
+
 class Likelihood(nn.Module):
     def __init__(self, num_features, num_states, learning_rate=0.001):
         nn.Module.__init__(self)
@@ -66,13 +96,13 @@ class Likelihood(nn.Module):
         self.lr = learning_rate
         self.state_network = OrderedDict()
         self.output_network = OrderedDict()
-        for k in range(num_states):
-            self.state_network[k] = StateNetwork(in_features=num_features, num_states=num_states)
-            self.output_network[k] = OutputNetwork(in_features=num_features, out_features=1)
+        for j in range(num_states):
+            self.state_network[j] = StateNetwork(in_features=num_features, num_states=num_states)
+            self.output_network[j] = OutputNetwork(in_features=num_features, out_features=1)
         self.psudo_counts = nn.Parameter(torch.ones(num_states).to(device))
 
     def get_initial_dist(self):
-        initial_dist = self.psudo_counts / self.psudo_counts.sum()
+        initial_dist = self.psudo_counts / self.psudo_counts.detach().sum()
         return initial_dist
 
     def get_distribution(self, input_observations):
@@ -85,7 +115,8 @@ class Likelihood(nn.Module):
 
     def get_log_likelihood(self, event_data, transition_expectations, expectations):
         num_events = len(event_data)
-        lls = 0
+        lls = np2torch(np.array(0.))
+        num_samples = np2torch(np.array(0.))
         for p in range(num_events):
             input_observations, output_observations = event_data[p]
             obs_distribution = self.get_distribution(input_observations)
@@ -97,8 +128,9 @@ class Likelihood(nn.Module):
             event_lls_2 = (transition_expectations_event * log_psi).sum(dim=1)
             lls_event = (event_lls_1 + event_lls_2).sum().sum()
             lls += lls_event
+            num_samples += input_observations.shape[1]
 
-        return lls
+        return lls / num_samples
 
     def get_log_psi(self, input_observations):
         intermediate_variables = torch.zeros((input_observations.shape[0], input_observations.shape[1],

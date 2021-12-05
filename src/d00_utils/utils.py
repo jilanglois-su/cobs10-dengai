@@ -33,10 +33,11 @@ def log_joint_hess(y, X, w, sigma2):
     return -np.eye(len(w)) / sigma2 - np.dot(X.T, np.multiply(X, np.exp(np.dot(X, w))[:, np.newaxis]))
 
 
-def variable_analysis(x_values, col, ylim=None):
+def variable_analysis(x_values, col, ax=None, ylim=None):
     if ylim is None:
         ylim = [1e-3, 1e2]
-    fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(8, 8))
+    if ax is None:
+        fig, ax = plt.subplots(nrows=2, ncols=1, figsize=(8, 8))
     f, Pxx_den = signal.welch(x_values)
     ax[0].semilogy(f, Pxx_den)
     ax[0].set_ylim(ylim)

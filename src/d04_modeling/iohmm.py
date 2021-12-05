@@ -1,6 +1,11 @@
 import numpy as np
+import pandas as pd
 import torch
-from src.d00_utils.iohmm_utils import Likelihood, np2torch
+import torch.nn.functional as F
+from src.d00_utils.iohmm_utils import LinearWithChannel, np2torch
+from src.d00_utils.constants import PATH_OUTPUT_NETWORK, PATH_STATE_NETWORK
+
+torch.autograd.set_detect_anomaly(True)
 
 
 class IOHMM:
@@ -8,12 +13,73 @@ class IOHMM:
     An Input Output HMM Architecture, Bengio and Frasconi 1995
     """
 
-    def __init__(self, num_features, num_states):
+    def __init__(self, num_features, num_states, learning_rate=0.001, load=True, model_name=None):
+        if model_name is None:
+            self.__model_name = 'iohmm_%i_%i' % (num_features, num_states)
+        else:
+            self.__model_name = model_name
         self.num_states = num_states
         self.num_featuers = num_features
-        self.likelihood = Likelihood(num_features, num_states)
-        self.likelihood_optimizer = torch.optim.Adam(self.likelihood.parameters(),
-                                                     lr=self.likelihood.lr)
+        self.state_network = LinearWithChannel(input_size=num_features, output_size=num_states, channel_size=num_states)
+        self.output_network = LinearWithChannel(input_size=num_features, output_size=1, channel_size=num_states)
+        self.psudo_counts = torch.ones(self.num_states)
+        self.state_optimizer = torch.optim.Adam(self.state_network.parameters(), lr=learning_rate)
+        self.output_optimizer = torch.optim.Adam(self.output_network.parameters(), lr=learning_rate)
+        if load:
+            state_checkpoint = torch.load(PATH_STATE_NETWORK.format(name=self.__model_name))
+            self.state_network.load_state_dict(state_checkpoint['model_state_dict'])
+            self.psudo_counts = state_checkpoint['psudo_counts']
+            self.state_optimizer.load_state_dict(state_checkpoint['optimizer_state_dict'])
+
+            output_checkpoint = torch.load(PATH_OUTPUT_NETWORK.format(name=self.__model_name))
+            self.output_network.load_state_dict(output_checkpoint['model_state_dict'])
+            self.output_optimizer.load_state_dict(output_checkpoint['optimizer_state_dict'])
+
+    def get_initial_dist(self):
+        initial_dist = self.psudo_counts / self.psudo_counts.sum()
+        return initial_dist
+
+    def get_log_psi(self, input_observations):
+        """
+        :param input_observations:
+        :return: torch.tensor(channel_size, batch_size, output_size)
+        """
+        intermediate_variables = self.state_network.forward(input_observations)
+        log_psi = F.log_softmax(intermediate_variables, dim=-1)
+        return log_psi
+
+    def get_distribution(self, input_observations):
+        """
+        :param input_observations:
+        :return: torch.tensor(channel_size, batch_size, output_size)
+        """
+        log_rates = self.output_network.forward(input_observations)
+        distribution = torch.distributions.Poisson(rate=torch.exp(log_rates))
+        return distribution
+
+    def log_likelihood_emissions(self, input_observations, output_observations, expectations):
+        """
+        :param input_observations: torch.tensor(epoch_size, batch_size, output_size)
+        :param output_observations: torch.tensor(epoch_size, batch_size, output_size)
+        :param expectations: torch.tensor(epoch_size, batch_size, output_size)
+        :return:
+        """
+        obs_distribution = self.get_distribution(input_observations)
+        poisson_log_prob = torch.squeeze(obs_distribution.log_prob(output_observations))
+        lls = (expectations * torch.transpose(poisson_log_prob, 0, 1)).sum().sum()
+
+        return lls
+
+    def log_likelihood_transitions(self, input_observations, transition_expectations):
+        """
+       :param input_observations: torch.tensor(batch_size, output_size)
+       :param transition_expectations: torch.tensor(epoch_size, channel_size=num_states, batch_size, output_size=num_states)
+       :return:
+       """
+        log_psi = torch.squeeze(self.get_log_psi(input_observations))
+        lls = (transition_expectations * log_psi).sum().sum().sum()
+
+        return lls
 
     def e_step(self, event_data):
         """
@@ -29,10 +95,11 @@ class IOHMM:
 
         Returns
         ---
-        expectations: list of (T, K) arrays of marginal probabilities
+        expectations: list of (batch_size, output_size=num_states) arrays of marginal probabilities
             p(z_t = k | x_{1:t}) for each event (filtered).
 
-        transition_expectations: list of (T, K, K) arrays of expected transitions
+        transition_expectations: list of (channel_size=num_states, batch_size, output_size=num_states) arrays of
+        expected transitions
         """
 
         expectations = []
@@ -40,44 +107,62 @@ class IOHMM:
         num_events = len(event_data)
         for p in range(num_events):
             input_observations, output_observations = event_data[p]
-            num_periods = input_observations.shape[1]
-            log_betas_event = np2torch(np.zeros((num_periods, self.num_states)))
-            log_alphas_event = np2torch(np.zeros((num_periods+1, self.num_states)))
-            log_alphas_event[0, :] = torch.log(self.likelihood.get_initial_dist())
-            log_expectations_event = np2torch(np.zeros((num_periods+1, self.num_states)))
-            log_expectations_event[0, :] = np2torch(np.log(np.ones(self.num_states) / self.num_states))
-            # log_psi (t, j, i)
-            log_psi = torch.squeeze(self.likelihood.get_log_psi(input_observations))
-            obs_distribution = self.likelihood.get_distribution(input_observations)
-            poisson_log_prob = torch.squeeze(obs_distribution.log_prob(output_observations))
+            num_periods = input_observations.shape[0]
+            log_betas_event = torch.zeros((num_periods, self.num_states))
+            log_alphas_event = torch.zeros((num_periods+1, self.num_states))
+            log_alphas_event[0, :] = torch.log(self.get_initial_dist())
+            log_expectations_event = torch.zeros((num_periods+1, self.num_states))
+            log_expectations_event[0, :] = torch.log(self.get_initial_dist())
+            # log_psi torch.tensor(channel_size, batch_size, output_size)
+            log_psi = torch.squeeze(self.get_log_psi(input_observations)).detach()
+            obs_distribution = self.get_distribution(input_observations)
+            poisson_log_prob = torch.squeeze(obs_distribution.log_prob(output_observations)).detach()
             for t in range(1, num_periods+1):
                 self.backward_step(log_betas_event, log_psi, poisson_log_prob, num_periods-t)
                 self.forward_step(log_alphas_event, log_psi, poisson_log_prob, t)
 
-                log_expectations_term = torch.zeros(log_psi[t-1].shape) + log_expectations_event[t-1, :, None]
-                log_expectations_event[t, :] = torch.logsumexp(log_expectations_term + log_psi[t-1], dim=0)
+                log_expectations_term = torch.zeros(log_psi[:, t-1, :].shape) + log_expectations_event[t-1, :][:, None]
+                log_expectations_event[t, :] = torch.squeeze(torch.logsumexp(log_expectations_term + log_psi[:, t-1, :], dim=0))
 
-            log_beta_term = torch.zeros(log_psi[:, :, :].shape) + log_betas_event[:, None, :]
-            log_alpha_term = torch.zeros(log_psi[:, :, :].shape) + log_alphas_event[:-1, :, None]
+            log_beta_term = torch.zeros(log_psi.shape) + log_betas_event[None, :, :]
+            log_alpha_term = torch.zeros(log_psi.shape) + torch.transpose(log_alphas_event[:-1, :], 0, 1)[:, :, None]
             log_transition_expectations_event = log_beta_term + log_alpha_term + log_psi
             # TODO: looks weird that normalization is only with last value of alpha
-            normalization_term = torch.logsumexp(log_alphas_event[-1, :], dim=-1)
-            log_transition_expectations_event -= normalization_term
+            normalization_term = torch.logsumexp(torch.logsumexp(log_transition_expectations_event, dim=-1), dim=0)
+            log_transition_expectations_event -= normalization_term[None, :, None]
 
             expectations += [torch.exp(log_expectations_event[1:])]
             transition_expectations += [torch.exp(log_transition_expectations_event)]
 
         return expectations, transition_expectations
 
-    def backward_step(self, log_betas_event, log_psi, poisson_log_prob, t):
-        log_beta_term = torch.zeros(log_psi[t].shape) + log_betas_event[t, None, :]
-        log_sum1 = torch.logsumexp(log_psi[t] + log_beta_term, dim=1)
-        log_betas_event[t - 1, :] = poisson_log_prob[t, :] + log_sum1
+    @staticmethod
+    def backward_step(log_betas_event, log_psi, poisson_log_prob, t):
+        """
+        :param log_betas_event: torch.tensor(batch_size, output_size=num_states)
+        :param log_psi: torch.tensor(channel_size=num_states, batch_size, output_size=num_states)
+        :param poisson_log_prob: torch.tensor(channel_size=num_states, batch_size, output_size=1)
+        :param t: int
+        :return:
+        """
+        log_beta_term = torch.zeros(log_psi[:, t, :].shape) + log_betas_event[t, :][None, :]
+        log_sum1 = torch.logsumexp(log_psi[:, t, :] + log_beta_term, dim=-1)
+        # log_sum1 = torch.tensor(channel_size=num_states, batch_size)
+        log_betas_event[t - 1, :] = torch.squeeze(poisson_log_prob[:, t]) + log_sum1
 
-    def forward_step(self, log_alphas_event, log_psi, poisson_log_prob, t):
-        log_alpha_term = torch.zeros(log_psi[t-1].shape) + log_alphas_event[t - 1, :, None]
-        log_sum0 = torch.logsumexp(log_psi[t-1] + log_alpha_term, dim=0)
-        log_alphas_event[t, :] = poisson_log_prob[t-1, :] + log_sum0
+    @staticmethod
+    def forward_step(log_alphas_event, log_psi, poisson_log_prob, t):
+        """
+        :param log_alphas_event: torch.tensor(batch_size, output_size=num_states)
+        :param log_psi: torch.tensor(channel_size=num_states, batch_size, output_size=num_states)
+        :param poisson_log_prob: torch.tensor(channel_size=num_states, batch_size, output_size=1)
+        :param t: int
+        :return:
+        """
+        log_alpha_term = torch.zeros(log_psi[:, t - 1, :].shape) + log_alphas_event[t - 1, :][:, None]
+        log_sum0 = torch.logsumexp(log_psi[:, t - 1, :] + log_alpha_term, dim=0)
+        # log_sum0 = torch.tensor(channel_size=num_states, batch_size)
+        log_alphas_event[t, :] = torch.squeeze(poisson_log_prob[:, t - 1]) + log_sum0
 
     def m_step(self, event_data, expectations, transition_expectations):
         """Solve for the Gaussian parameters that maximize the expected log
@@ -98,21 +183,30 @@ class IOHMM:
         -------
         loglikelihood
         """
+        self.psudo_counts = torch.zeros(self.num_states)
+        for p in range(len(event_data)):
+            self.psudo_counts += expectations[p].sum(dim=0)
+        ll_output, ll_state = None, None
+        for i in range(20):
+            ll_output, ll_state = 0., 0.
+            for p in range(len(event_data)):
+                input_observations, output_observations = event_data[p]
+                self.output_optimizer.zero_grad()
+                loss_output = -self.log_likelihood_emissions(input_observations, output_observations, expectations[p])
+                loss_output.backward()
+                self.output_optimizer.step()
+                ll_output += loss_output.item()
 
-        lls = None
-        for i in range(10):
-            self.likelihood_optimizer.zero_grad()
-            loss = -self.likelihood.get_log_likelihood(event_data, transition_expectations, expectations)
-            loss.backward()
-            self.likelihood_optimizer.step()
-            lls = loss.item()
+                self.state_optimizer.zero_grad()
+                loss_state = -self.log_likelihood_transitions(input_observations, transition_expectations[p])
+                loss_state.backward()
+                self.state_optimizer.step()
+                ll_state += loss_state.item()
 
-        return lls
+        return - ll_state - ll_output
 
-    def fit(self, event_data, num_iterations=100):
-        """Fit an HMM using the EM algorithm above. You'll have to initialize the
-        parameters somehow; k-means often works well. You'll also need to monitor
-        the marginal likelihood and check for convergence.
+    def fit(self, event_data, num_iterations=200, save=True):
+        """Fit an IOHMM using the EM algorithm above.
 
         Returns
         -------
@@ -123,16 +217,34 @@ class IOHMM:
         c = 0
         # print("Solving", end="", flush=True)
         print("Solving")
-        while c < num_iterations:
+        improvement = 10
+        while improvement > -1e-4:
             # E-Step
             expectations, transition_expectations = self.e_step(event_data)
             # M-Step
             lls_iter = self.m_step(event_data, expectations, transition_expectations)
 
-            lls += [lls_iter]
             print("[iter %3i] Loss: %10.4f" % (c, lls_iter))
+            c += 1
+            if len(lls) > 0:
+                improvement = lls_iter - lls[-1]
+            lls += [lls_iter]
+
+            if c == num_iterations:
+                break
 
         print("Done")
+
+        if save:
+            torch.save({
+                'model_state_dict': self.output_network.state_dict(),
+                'optimizer_state_dict': self.output_optimizer.state_dict(),
+            }, PATH_OUTPUT_NETWORK.format(name=self.__model_name))
+            torch.save({
+                'psudo_counts': self.psudo_counts,
+                'model_state_dict': self.state_network.state_dict(),
+                'optimizer_state_dict': self.state_optimizer.state_dict(),
+            }, PATH_STATE_NETWORK.format(name=self.__model_name))
         return lls
 
     @staticmethod
@@ -149,10 +261,116 @@ class IOHMM:
                     event_data.append((np2torch(input_observations), np2torch(output_observations)))
             else:
                 num_periods = len(x_data.loc[city])
-                input_observations = x_data.loc[city].values.reshape(1, num_periods, -1)
-                output_observations = y_data.loc[city].values.reshape(1, num_periods, -1)
+                input_observations = x_data.loc[city].values.reshape(num_periods, -1)
+                output_observations = y_data.loc[city].values.reshape(num_periods, -1)
                 event_data.append((np2torch(input_observations), np2torch(output_observations)))
         return event_data
+
+    def viterbi(self, event_data):
+        most_likely_states = []
+        num_events = len(event_data)
+        for p in range(num_events):
+            input_observations, output_observations = event_data[p]
+            num_periods = input_observations.shape[0]
+            log_mu_event = torch.zeros((num_periods, self.num_states))
+            # log_psi torch.tensor(channel_size, batch_size, output_size)
+            log_psi = torch.squeeze(self.get_log_psi(input_observations)).detach()
+            obs_distribution = self.get_distribution(input_observations)
+            poisson_log_prob = torch.squeeze(obs_distribution.log_prob(output_observations)).detach()
+            for t in range(1, num_periods+1):
+                log_mu_term = log_psi[:, num_periods-t, :] + log_mu_event[num_periods-t, :][None, :]
+                # log_sum1 = torch.tensor(channel_size=num_states, batch_size)
+                log_mu_next = torch.squeeze((poisson_log_prob[:, num_periods-t][None, :] + log_mu_term).max(dim=-1).values)
+                log_mu_event[num_periods-t-1, :] = log_mu_next
+
+            most_likely_states_batch = [None] * num_periods
+            log_mu_term = poisson_log_prob[:, 0] + log_mu_event[0, :][None, :]
+            most_likely_states_batch[0] = (log_mu_term + torch.log(self.get_initial_dist())).argmax()
+            for t in range(1, num_periods):
+                log_mu_term = poisson_log_prob[:, t] + log_mu_event[t, :][None, :]
+                prev_state = most_likely_states_batch[t-1]
+                log_transition = torch.squeeze(log_psi[prev_state, t, :])
+                most_likely_states_batch[t] = (log_mu_term + log_transition).argmax()
+
+            most_likely_states += [most_likely_states_batch]
+
+        return most_likely_states
+
+    def predict(self, event_data):
+        most_likely_states = self.viterbi(event_data=event_data)
+        output_viterbi = []
+        for p in range(len(event_data)):
+            input_observations, output_observations = event_data[p]
+            log_rates = self.output_network.forward(input_observations)
+            prediction = torch.squeeze(torch.exp(log_rates))
+            output_viterbi += prediction[most_likely_states[p], :]
+
+        return output_viterbi, most_likely_states
+
+    def forecast(self, train_event_data, test_event_data, m=8, num_samples=250, alpha=0.05):
+        state_space = list(range(self.num_states))
+        forecasts = []
+        states_prob = []
+        for p in range(len(train_event_data)):
+            input_obs_train, output_obs_train = train_event_data[p]
+            input_obs_test, output_obs_test = test_event_data[p]
+            num_periods = input_obs_train.shape[0]
+            test_periods = input_obs_test.shape[0]
+            forecasts_event = pd.DataFrame(np.nan, index=np.arange(test_periods), columns=['map', 'lower', 'upper'])
+            states_prob_event = pd.DataFrame(np.nan, index=np.arange(test_periods), columns=state_space)
+            input_observations = input_obs_train.clone()
+            output_observations = output_obs_train.clone()
+
+            print("Sampling", end="", flush=True)
+            for t in range(input_obs_test.shape[0]-m):
+                log_filter_prob = self.filter(input_observations, num_periods,
+                                              output_observations)
+
+                log_psi_m = torch.squeeze(self.get_log_psi(input_obs_test[t:t+m, :])).detach()
+                log_expectations_event = torch.zeros((m+1, self.num_states))
+                log_expectations_event[0, :] = log_filter_prob[-1, :]
+                for step in range(1, m+1):
+                    log_expectations_term = log_expectations_event[step-1, :][:, None] + log_psi_m[:, step-1, :]
+                    log_expectations_event[step, :] = torch.squeeze(torch.logsumexp(log_expectations_term, dim=0))
+
+                state_dist = torch.exp(log_expectations_event[-1, :]).detach().numpy()
+                states_prob_event.at[t+m] = state_dist
+                states_sim = np.random.choice(state_space, size=num_samples, p=state_dist)
+                input_observation_t = torch.reshape(input_obs_test[t, :], (1, -1))
+                obs_distribution = self.get_distribution(input_observation_t)
+                samples_sim = torch.squeeze(obs_distribution.sample((num_samples,))).detach().numpy()
+
+                obs_sim = samples_sim[(np.arange(num_samples), states_sim)]
+                lower_value = np.percentile(obs_sim, q=100*alpha/2)
+                upper_value = np.percentile(obs_sim, q=100*(1.-alpha/2))
+                map_value = np.median(obs_sim)
+                forecasts_event.at[t+m, 'lower'] = lower_value
+                forecasts_event.at[t+m, 'upper'] = upper_value
+                forecasts_event.at[t+m, 'map'] = map_value
+
+                if t % 10 == 0:
+                    print(".", end="", flush=True)
+                num_periods += 1
+                input_observations = torch.cat((input_observations, input_observation_t), dim=0)
+                output_observations = torch.cat((output_observations, torch.reshape(output_obs_test[t], (1, -1))), dim=0)
+
+            print("Done")
+            forecasts += [forecasts_event]
+            states_prob += [states_prob_event]
+
+        return forecasts, states_prob
+
+    def filter(self, input_observations, num_periods, output_observations):
+        log_alphas_event = torch.zeros((num_periods + 1, self.num_states))
+        log_alphas_event[0, :] = torch.log(self.get_initial_dist())
+        log_psi = torch.squeeze(self.get_log_psi(input_observations)).detach()
+        obs_distribution = self.get_distribution(input_observations)
+        poisson_log_prob = torch.squeeze(obs_distribution.log_prob(output_observations)).detach()
+        for t in range(1, num_periods):
+            self.forward_step(log_alphas_event, log_psi, poisson_log_prob, t)
+
+        log_filter_prob = log_alphas_event - torch.logsumexp(log_alphas_event, dim=1)[:, None]
+        return log_filter_prob
 
 
 if __name__ == "__main__":
@@ -163,12 +381,18 @@ if __name__ == "__main__":
     dda = DengueDataApi()
     x_train, x_validate, y_train, y_validate = dda.split_data()
     z_train, z_validate, pct_var = dda.get_pca(x_train, x_validate, num_components=4)
-    model = IOHMM(num_states=3, num_features=z_train.shape[1])
-    event_data = model.format_event_data(z_train, y_train)
-    lls = model.fit(event_data=event_data)
+    model = IOHMM(num_states=3, num_features=z_train.shape[1], load=True)
 
-    plt.plot(lls)
-    plt.show()
+    event_data_train = model.format_event_data(z_train.droplevel('year'), y_train.droplevel('year'))
+    event_data_test = model.format_event_data(z_validate.droplevel('year'), y_validate.droplevel('year'))
+    lls = model.fit(event_data=event_data_train, save=False)
+    # plt.plot(lls)
+    # plt.show()
+
+    output_viterbi, most_likely_states = model.predict(event_data_train)
+    forecasts, states_prob = model.forecast(event_data_train, event_data_test)
+
+
 
 
 

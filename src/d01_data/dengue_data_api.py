@@ -9,11 +9,11 @@ import os
 class DengueDataApi:
 
     def __init__(self, interpolate=True):
-        features_train = pd.read_csv(DATA_RAW + "dengue_features_train.csv", index_col=INDEX_COLS).sort_index()
+        features_train = pd.read_csv(PATH_DATA_RAW + "dengue_features_train.csv", index_col=INDEX_COLS).sort_index()
         features_train[WEEK_START_DATE_COL] = pd.to_datetime(features_train[WEEK_START_DATE_COL])
-        features_test = pd.read_csv(DATA_RAW + "dengue_features_test.csv", index_col=INDEX_COLS).sort_index()
+        features_test = pd.read_csv(PATH_DATA_RAW + "dengue_features_test.csv", index_col=INDEX_COLS).sort_index()
         features_test[WEEK_START_DATE_COL] = pd.to_datetime(features_test[WEEK_START_DATE_COL])
-        labels_train = pd.read_csv(DATA_RAW + "dengue_labels_train.csv", index_col=INDEX_COLS).sort_index()
+        labels_train = pd.read_csv(PATH_DATA_RAW + "dengue_labels_train.csv", index_col=INDEX_COLS).sort_index()
 
         for features_data in [features_test, features_train]:
             for city in features_data.index.get_level_values('city').unique():

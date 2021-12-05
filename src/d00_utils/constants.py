@@ -1,4 +1,6 @@
-DATA_RAW = "../data/01_raw/"
+PATH_DATA_RAW = "../data/01_raw/"
+PATH_OUTPUT_NETWORK = "output_network_{name:}.pkl"
+PATH_STATE_NETWORK = "state_network_{name:}.pkl"
 
 NDVI_COLS = ['ndvi_ne', 'ndvi_nw', 'ndvi_se', 'ndvi_sw']
 PERSIANN_COLS = ['precipitation_amt_mm']
