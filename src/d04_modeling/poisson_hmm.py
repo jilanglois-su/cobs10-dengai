@@ -1,14 +1,18 @@
 import numpy as np
-from scipy.special import logsumexp
-from scipy.special import gammaln
+import pandas as pd
+from scipy.special import logsumexp, gammaln
+from scipy.stats import poisson
 from src.d04_modeling.poisson_glm import PoissonGLM
 import multiprocessing as mp
 
 cpu_count = mp.cpu_count()
+eps = 1.e-6
 
 
 class PoissonHMM:
-    def __init__(self, num_states, alpha=1., sigma2=1.):
+    def __init__(self, num_states, alpha=1., sigma2=1., seed=None):
+        if seed is not None:
+            np.random.seed(seed)
         self.num_states = num_states
         if isinstance(alpha, float):
             alpha = np.ones(self.num_states) * alpha
@@ -56,7 +60,7 @@ class PoissonHMM:
         log_alphas[0, :] = np.log(initial_dist)
         for t in range(1, T):
             factor = log_alphas[t-1, :] + log_likelihoods[t-1, :]
-            log_alphas_next = logsumexp(np.log(transition_matrix) + factor[:, np.newaxis], axis=0)
+            log_alphas_next = logsumexp(np.log(transition_matrix + eps) + factor[:, np.newaxis], axis=0)
             log_alphas[t, :] = log_alphas_next - logsumexp(factor)[np.newaxis]
 
         return log_alphas
@@ -96,7 +100,7 @@ class PoissonHMM:
         log_betas = np.zeros((T, K))
         for t in range(1, T):
             factor = log_betas[T-t, :] + log_likelihoods[T-t, :]
-            log_betas_next = logsumexp(np.log(transition_matrix) + factor[np.newaxis, :], axis=1)
+            log_betas_next = logsumexp(np.log(transition_matrix + eps) + factor[np.newaxis, :], axis=1)
             log_betas[T-1-t, :] = log_betas_next
 
         return log_betas
@@ -172,7 +176,7 @@ class PoissonHMM:
                     log_likelihoods_j = log_likelihoods[1:, j]
                     log_betas_j = log_betas[1:, j]
                     log_transition_expectation_batch[i, j, :] = log_alphas_i + log_likelihoods_i \
-                                                                + np.log(transition_matrix[i, j]) \
+                                                                + np.log(transition_matrix[i, j] + eps) \
                                                                 + log_likelihoods_j + log_betas_j
 
             log_transition_expectation_batch = log_transition_expectation_batch \
@@ -247,7 +251,7 @@ class PoissonHMM:
             log_mu = np.zeros((T, K))
             for t in range(1, T):
                 factor = log_mu[T-t, :] + log_likelihoods[T-t, :]
-                log_mu_next = np.max(np.log(transition_matrix) + factor[np.newaxis, :], axis=1)
+                log_mu_next = np.max(np.log(transition_matrix + eps) + factor[np.newaxis, :], axis=1)
                 log_mu[T-1-t, :] = log_mu_next
 
             most_likely_states_batch = [None] * T
@@ -256,7 +260,7 @@ class PoissonHMM:
             for t in range(1, T):
                 factor = log_likelihoods[t, :] + log_mu[t]
                 prev_state = most_likely_states_batch[t-1]
-                log_transition = np.log(transition_matrix[prev_state, :])
+                log_transition = np.log(transition_matrix[prev_state, :] + eps)
                 most_likely_states_batch[t] = np.argmax(factor + log_transition)
 
             most_likely_states += [most_likely_states_batch]
@@ -280,8 +284,10 @@ class PoissonHMM:
         improvement = 10
         c = 0
         print("Solving", end="", flush=True)
-        while improvement > 1:
-            expectations, marginal_ll, transition_expectations = self.e_step(event_data, parameters)
+        prev_parameters = None
+        while improvement > -1e-4:
+            prev_parameters = parameters
+            expectations, marginal_ll, transition_expectations = self.e_step(event_data, prev_parameters)
             parameters = self.m_step(event_data, expectations, transition_expectations)
 
             if len(lls) > 0:
@@ -294,14 +300,35 @@ class PoissonHMM:
             if c > 50:
                 break
         print("Done")
-        return lls, parameters
+        return lls, prev_parameters
 
-    def forecast(self, train_event_data, test_event_data, parameters, m=8, num_samples=100):
+    def predict(self, event_data, parameters):
+        expectations, marginal_ll, _ = self.e_step(event_data, parameters)
+        most_likely_states = self.viterbi(event_data=event_data, parameters=parameters)
+        y_viterbi = []
+        for i in range(len(event_data['x'])):
+            y_data = event_data['y'][i]
+            x_data = event_data['x'][i]
+            y_hat_event = np.zeros((y_data.shape[0], self.num_states))
+            y_viterbi_event = np.zeros((y_data.shape[0], self.num_states))
+            for k in range(self.num_states):
+                mask = np.array(most_likely_states[i]) == k
+                poisson_glm = PoissonGLM(x_train=x_data, y_train=y_data,
+                                         sigma2=self.sigma2, bias=False)
+
+                y_hat_event[:, k] = poisson_glm.obs_map(parameters['mu'][k], x_data).reshape(-1,)
+                y_viterbi_event[mask, k] = 1.
+            y_viterbi += [np.sum(y_hat_event * y_viterbi_event, axis=1)]
+
+        return y_viterbi, most_likely_states, marginal_ll
+
+    def forecast(self, train_event_data, test_event_data, parameters, m=8, num_samples=250, alpha=0.05):
         initial_dist = parameters['initial_dist']
         transition_matrix = parameters['transition_matrix']
         mu = parameters['mu']
         state_space = list(range(self.num_states))
         forecasts = []
+        states_prob = []
         for i in range(len(train_event_data['x'])):
             x_train = train_event_data['x'][i]
             y_train = train_event_data['y'][i]
@@ -311,7 +338,9 @@ class PoissonHMM:
             x_test = test_event_data['x'][i]
             y_test = test_event_data['y'][i]
             num_periods = x_train.shape[0]
-            forecasts_batch = np.zeros((x_test.shape[0], num_samples)) + np.nan
+            test_periods = x_test.shape[0]
+            forecasts_event = pd.DataFrame(np.nan, index=np.arange(test_periods), columns=['map', 'lower', 'upper'])
+            states_prob_event = pd.DataFrame(np.nan, index=np.arange(test_periods), columns=state_space)
             x_data = x_train.copy()
             y_data = y_train.copy()
             print("Sampling", end="", flush=True)
@@ -320,11 +349,18 @@ class PoissonHMM:
                 log_alphas = self.forward_pass(initial_dist, transition_matrix, log_likelihoods)
                 log_filter_prob = log_alphas - logsumexp(log_alphas, axis=1)[:, np.newaxis]
                 initial_dist = np.exp(log_filter_prob[-1, :])
-                sample_states = self.sequential_sampling(initial_dist, m, num_samples, state_space,
-                                                         transition_matrix)
-                sample_mu = mu[sample_states]
-                sampel_forecast = poisson_glm.obs_map(sample_mu.T, x_test[t+m-1, :])
-                forecasts_batch[t+m, :] = sampel_forecast.flatten()
+                m_step_dist = np.dot(np.linalg.matrix_power(transition_matrix.T, m), initial_dist)
+                states_prob_event.at[t+m] = m_step_dist
+                states_sim = np.random.choice(state_space, size=num_samples, p=m_step_dist)
+                mu_sim = mu[list(states_sim)]
+                rate_sim = poisson_glm.rate_map(mu_sim.T, x_test[t + m - 1, :])
+                obs_sim = poisson.rvs(rate_sim).flatten()
+                lower_value = np.percentile(obs_sim, q=100*alpha/2)
+                upper_value = np.percentile(obs_sim, q=100*(1.-alpha/2))
+                map_value = np.median(obs_sim)
+                forecasts_event.at[t+m, 'lower'] = lower_value
+                forecasts_event.at[t+m, 'upper'] = upper_value
+                forecasts_event.at[t+m, 'map'] = map_value
                 if t % 10 == 0:
                     print(".", end="", flush=True)
                 num_periods += 1
@@ -332,38 +368,10 @@ class PoissonHMM:
                 y_data = np.append(y_data, y_test[t])
 
             print("Done")
-            forecasts += [forecasts_batch]
+            forecasts += [forecasts_event]
+            states_prob += [states_prob_event]
 
-        return forecasts
-
-    def sequential_sampling(self, initial_dist, m, num_samples, state_space, transition_matrix):
-        m_step_dist = np.dot(np.linalg.matrix_power(transition_matrix.T, m), initial_dist)
-        sample_states = np.random.choice(range(self.num_states), size=num_samples,
-                                          p=m_step_dist)
-        return list(sample_states)
-
-    def parallel_sampling(self, initial_dist, m, num_samples, state_space, transition_matrix):
-        # Step 1: Init multiprocessing.Pool()
-        pool = mp.Pool(cpu_count)
-        # Step 2: `pool.apply` the `sim_m_step_transition()`
-        sample_args = (initial_dist, m, state_space, transition_matrix)
-        sample_states = [pool.apply(self.sim_m_step_transition,
-                                    args=sample_args) for j in range(num_samples)]
-        # Step 3: Don't forget to close
-        pool.close()
-
-        return sample_states
-
-    def sim_m_step_transition(self, initial_dist, m, state_space, transition_matrix):
-        prev_state = np.random.choice(state_space, p=initial_dist)
-        next_state = None
-        path = [prev_state]
-        for step in range(m):
-            next_state = np.random.choice(range(self.num_states),
-                                          p=transition_matrix[prev_state, :])
-            path += [next_state]
-            prev_state = next_state
-        return next_state
+        return forecasts, states_prob
 
     @staticmethod
     def format_event_data(df):
@@ -405,24 +413,27 @@ if __name__ == "__main__":
     os.chdir('../')
     dda = DengueDataApi()
     x_train, x_validate, y_train, y_validate = dda.split_data()
-    z_train, z_validate, pct_var = dda.get_pca(x_train, x_validate, num_components=4)
+    num_components = 4
+    z_train, z_validate, pct_var = dda.get_pca(x_train, x_validate, num_components=num_components)
     z_train['bias'] = 1.
-    z_validate['bais'] = 1.
-    event_data = dict()
+    z_validate['bias'] = 1.
+    z_train.drop(columns=z_train.columns[:num_components], inplace=True)
+    z_validate.drop(columns=z_validate.columns[:num_components], inplace=True)
+    event_data_train = dict()
     model = PoissonHMM(num_states=3)
-    event_data['x'] = model.format_event_data(z_train.droplevel('year'))
-    event_data['y'] = model.format_event_data(y_train.droplevel('year'))
-    lls_k, parameters_k = model.fit(event_data=event_data)
+    event_data_train['x'] = model.format_event_data(z_train.droplevel('year'))
+    event_data_train['y'] = model.format_event_data(y_train.droplevel('year'))
+    lls_k, parameters_k = model.fit(event_data=event_data_train)
     print(lls_k)
     print(parameters_k)
-
-    most_likely_states = model.viterbi(event_data=event_data, parameters=parameters_k)
 
     event_data_validate = dict()
     event_data_validate['x'] = model.format_event_data(z_validate.droplevel('year'))
     event_data_validate['y'] = model.format_event_data(y_validate.droplevel('year'))
 
-    forecasts = model.forecast(event_data, event_data_validate, parameters_k)
+    y_viterbi_train, most_likely_states_train, _ = model.predict(event_data_train, parameters_k)
+    y_viterbi_validate, most_likely_states_validate, _ = model.predict(event_data_validate, parameters_k)
+    forecasts = model.forecast(event_data_train, event_data_validate, parameters_k)
 
     # marginal_ll, mae = model.validate_model(event_data=event_data_validate, parameters=parameters_k)
 

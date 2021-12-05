@@ -1,7 +1,7 @@
 from unittest import TestCase
 import numpy as np
 from scipy.special import logsumexp
-from src.d04_modeling.poisson_hmm import HMM
+from src.d04_modeling.poisson_hmm import PoissonHMM
 from scipy.stats import poisson, multivariate_normal
 
 
@@ -11,7 +11,7 @@ class TestHmmEm(TestCase):
         print("setUp")
 
         cls.num_states = 2
-        cls.model = HMM(num_states=cls.num_states)
+        cls.model = PoissonHMM(num_states=cls.num_states)
         cls.p = 3
 
         cls.pi = np.ones(cls.num_states)

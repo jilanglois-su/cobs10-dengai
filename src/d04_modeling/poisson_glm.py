@@ -92,8 +92,11 @@ class PoissonGLM(AbstractGLM):
             posterior_predictive_distribution[k, :] = poisson.pmf(k, mu=lambda_n).mean(axis=1).T
         return posterior_predictive_distribution
 
+    def rate_map(self, w, X):
+        return np.exp(np.dot(X, w).reshape((-1, 1)))
+
     def obs_map(self, w, X):
-        return np.floor(np.exp(np.dot(X, w).reshape((-1, 1))))
+        return np.floor(self.rate_map(w, X))
 
 
 if __name__ == "__main__":

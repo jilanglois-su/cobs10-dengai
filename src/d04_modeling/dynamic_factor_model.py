@@ -124,7 +124,7 @@ if __name__ == "__main__":
     dda = DengueDataApi(interpolate=False)
     x1, x2, y1, y2 = dda.split_data(random=False)
 
-    dfm_model = DynamicFactorModel(x1.copy(), y1.copy(), factors=3, factor_orders=2, inlcude_endog=False)
+    dfm_model = DynamicFactorModel(x1.copy(), y1.copy(), factors=3, factor_orders=1, inlcude_endog=False)
     dfm_model.fit()
 
     city = 'sj'
