@@ -357,10 +357,12 @@ class PoissonHMM:
                 obs_sim = poisson.rvs(rate_sim).flatten()
                 lower_value = np.percentile(obs_sim, q=100*alpha/2)
                 upper_value = np.percentile(obs_sim, q=100*(1.-alpha/2))
-                map_value = np.median(obs_sim)
+                median_value = np.median(obs_sim)
+                map_value = np.mean(obs_sim)
                 forecasts_event.at[t+m, 'lower'] = lower_value
                 forecasts_event.at[t+m, 'upper'] = upper_value
                 forecasts_event.at[t+m, 'map'] = map_value
+                forecasts_event.at[t+m, 'median'] = median_value
                 if t % 10 == 0:
                     print(".", end="", flush=True)
                 num_periods += 1
@@ -414,7 +416,7 @@ if __name__ == "__main__":
     dda = DengueDataApi()
     x_train, x_validate, y_train, y_validate = dda.split_data()
     num_components = 4
-    z_train, z_validate, pct_var = dda.get_pca(x_train, x_validate, num_components=num_components)
+    z_train, z_validate, pct_var, _ = dda.get_pca(x_train, x_validate, num_components=num_components)
     z_train['bias'] = 1.
     z_validate['bias'] = 1.
     z_train.drop(columns=z_train.columns[:num_components], inplace=True)

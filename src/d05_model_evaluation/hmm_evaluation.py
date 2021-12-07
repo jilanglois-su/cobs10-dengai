@@ -16,9 +16,9 @@ model_evaluation = pd.DataFrame(index=pd.Index([]), columns=['run_static', 'city
                                                              'num_states', 'city', 'lls', 'forecast_mae',
                                                              'in_mae', 'out_mae'])
 
-for run_static in [True, False]:
-    for city_dummy in [True, False]:
-        for no_glm in [True]:
+for run_static in [True]:
+    for city_dummy in [False]:
+        for no_glm in [True, False]:
             for num_states in [2, 3, 4]:
                 if no_glm:
                     if not run_static:
@@ -104,5 +104,5 @@ for run_static in [True, False]:
 
                 print(model_evaluation.to_string())
 
-model_evaluation.to_csv('model_evaluation_no_glm.csv')
+model_evaluation.to_csv('model_evaluation_glm.csv')
 

@@ -72,12 +72,13 @@ class AbstractSM(AbstractModel, ABC):
             plot_data['lower_bound'] = y_hat['lower ' + self._target_name]
             plot_data['upper_bound'] = y_hat['upper ' + self._target_name]
             t = plot_data.index
-            ax[c].plot(t, plot_data['total_cases'])
-            ax[c].plot(t, plot_data['prediction'])
-            ax[c].fill_between(t, plot_data['lower_bound'],
-                            plot_data['upper_bound'],
-                            facecolor='orange', alpha=0.5)
+            ax[c].plot(t, plot_data['total_cases'], label='obs')
+            ax[c].plot(t, plot_data['prediction'], label='%i step forecast' % m)
+            # ax[c].fill_between(t, plot_data['lower_bound'],
+            #                 plot_data['upper_bound'],
+            #                 facecolor='orange', alpha=0.5)
             ax[c].set_title(city)
+            ax[c].legend()
             c += 1
         plt.show()
 
@@ -112,14 +113,14 @@ class AbstractSM(AbstractModel, ABC):
         return model_evaluation
 
     def get_mae(self, x_data, y_data, m=None):
-        mae = 0
-        n = 0
+        mae = []
+        n = []
         for city in self._cities:
             if m is None:
                 y_hat = self.predict(city, x_data)
             else:
                 y_hat = self.forecast(city, x_data, y_data, m)[self._target_name]
             y = self.resample(y_data.loc[city])
-            mae += (y-y_hat).abs().sum()
-            n += len(y)
-        return mae / n
+            mae += [(y-y_hat).abs().mean()]
+            n += [len(y)]
+        return mae, n

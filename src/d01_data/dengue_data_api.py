@@ -129,7 +129,26 @@ class DengueDataApi:
                                   index=x_validate.index)
         var = np.power(w, 2)
         pct_var = (var[:num_components] / var.sum()).sum()
-        return z_train, z_validate, pct_var
+        factor_loadings = pd.DataFrame(v[:, :num_components], columns=new_features, index=x_train.columns)
+        return z_train, z_validate, pct_var, factor_loadings
+
+    def get_pca_separate(x_train, x_validate, num_components=4):
+        z_train = []
+        z_validate = []
+        pct_var = []
+        for city in x_train.index.get_level_values('city').unique():
+            x_cov = x_train.loc[city].cov()
+            w, v = np.linalg.eig(x_cov)
+            new_features = ["pc%i" % i for i in range(num_components)]
+            train_index = x_train.loc[(city, slice(None), slice(None)), :].index
+            validate_index = x_validate.loc[(city, slice(None), slice(None)), :].index
+            z_train += [pd.DataFrame(np.dot(x_train.loc[city], v[:, :num_components]), columns=new_features,
+                                     index=train_index)]
+            z_validate += [pd.DataFrame(np.dot(x_validate.loc[city], v[:, :num_components]), columns=new_features,
+                                        index=validate_index)]
+            var = np.power(w, 2)
+            pct_var += [(var[:num_components] / var.sum()).sum()]
+        return pd.concat(z_train, axis=0), pd.concat(z_validate, axis=0), pct_var
 
     def format_data(self, x_data, y_data, interpolate=True):
         endog = self.resample(self.transform_endog(y_data), interpolate)
@@ -162,4 +181,6 @@ if __name__ == "__main__":
     os.chdir('../')
     dda = DengueDataApi()
     df = dda.get_features_train()
+    x_train, x_validate, y_train, y_validate = dda.split_data(random=False)
+    z_train, z_validate, pct_var = dda.get_pca(x_train.copy(), x_validate.copy(), num_components=4)
     print(df.head())

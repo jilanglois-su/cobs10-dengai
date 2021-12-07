@@ -17,7 +17,7 @@ class TestHmmEm(TestCase):
         cls.event_data = cls.model.format_event_data(z_train.droplevel('year'), y_train.droplevel('year'))
 
     def test_e_step(self):
-        expectations, transition_expectations, log_alphas, log_betas = self.model.e_step(self.event_data)
+        expectations, transition_expectations, log_alphas, log_betas, _ = self.model.e_step(self.event_data)
         expectations_, transition_expectations_, log_alphas_, log_betas_ = self.slow_e_step(self.event_data)
         for p in range(len(self.event_data)):
             num_periods = self.event_data[p][0].shape[0]

@@ -106,6 +106,7 @@ class IOHMM:
 
         expectations = []
         transition_expectations = []
+        marginal_ll = torch.tensor(0.)
         log_alphas = []
         log_betas = []
         num_events = len(event_data)
@@ -119,6 +120,7 @@ class IOHMM:
                 self.forward_step(log_alphas_event, log_psi, poisson_log_prob, t)
 
             log_expectations_event = log_alphas_event + log_betas_event
+            marginal_ll_event = torch.logsumexp(log_alphas_event[-1, :], dim=-1)
             # Normalize log expectations
             log_expectations_event -= torch.logsumexp(log_expectations_event, dim=-1)[:, None]
             log_transition_expectations_event = log_psi[:, 1:, :]
@@ -133,16 +135,16 @@ class IOHMM:
             transition_expectations += [torch.exp(log_transition_expectations_event)]
             log_alphas += [log_alphas_event]
             log_betas += [log_betas_event]
+            marginal_ll += marginal_ll_event
 
-        return expectations, transition_expectations, log_alphas, log_betas
+        return expectations, transition_expectations, log_alphas, log_betas, marginal_ll.item()
 
     def initialize_e_step(self, input_observations, num_periods, output_observations):
         log_betas_event = torch.zeros((num_periods, self.num_states))
         log_alphas_event = torch.zeros((num_periods, self.num_states))
         # log_psi torch.tensor(channel_size, batch_size, output_size)
         log_psi = torch.squeeze(self.get_log_psi(input_observations)).detach()
-        obs_distribution = self.get_distribution(input_observations)
-        poisson_log_prob = torch.squeeze(obs_distribution.log_prob(output_observations)).detach()
+        poisson_log_prob = self.get_poisson_log_prob(num_periods, input_observations, output_observations)
         log_alphas_event[0, :] = torch.log(self.get_initial_dist()) + poisson_log_prob[:, 0]
         return log_alphas_event, log_betas_event, log_psi, poisson_log_prob
 
@@ -230,7 +232,7 @@ class IOHMM:
         improvement = 10
         while improvement > -1e-4:
             # E-Step
-            expectations, transition_expectations, _, _ = self.e_step(event_data)
+            expectations, transition_expectations, _, _, marginal_ll = self.e_step(event_data)
             # M-Step
             lls_iter = self.m_step(event_data, expectations, transition_expectations)
 
@@ -287,9 +289,8 @@ class IOHMM:
             log_mu_event = torch.zeros((num_periods, self.num_states))
             # log_psi torch.tensor(channel_size, batch_size, output_size)
             log_psi = torch.squeeze(self.get_log_psi(input_observations)).detach()
-            obs_distribution = self.get_distribution(input_observations)
-            poisson_log_prob = torch.squeeze(obs_distribution.log_prob(output_observations)).detach()
-            for t in range(1, num_periods+1):
+            poisson_log_prob = self.get_poisson_log_prob(num_periods, input_observations, output_observations)
+            for t in range(1, num_periods):
                 log_mu_term = log_psi[:, num_periods-t, :] + log_mu_event[num_periods-t, :][None, :]
                 # log_sum1 = torch.tensor(channel_size=num_states, batch_size)
                 log_mu_next = torch.squeeze((poisson_log_prob[:, num_periods-t][None, :] + log_mu_term).max(dim=-1).values)
@@ -308,9 +309,18 @@ class IOHMM:
 
         return most_likely_states
 
+    def get_poisson_log_prob(self, num_periods, input_observations, output_observations):
+        mask = torch.squeeze(output_observations < 0)
+        poisson_log_prob = torch.zeros(self.num_states, num_periods)
+        obs_distribution = self.get_distribution(input_observations[~mask, :])
+        poisson_log_prob[:, ~mask] = torch.squeeze(obs_distribution.log_prob(output_observations[~mask])).detach()
+        if mask.any():
+            poisson_log_prob[:, mask] = torch.ones((self.num_states, mask.sum()))
+        return poisson_log_prob
+
     def predict(self, event_data):
         most_likely_states = self.viterbi(event_data=event_data)
-        expectations, transition_expectations, _, _ = self.e_step(event_data)
+        expectations, transition_expectations, _, _, marginal_ll = self.e_step(event_data)
         output_viterbi = []
         output_network = []
         for p in range(len(event_data)):
@@ -320,7 +330,7 @@ class IOHMM:
             output_network += [prediction]
             output_viterbi += [prediction[(most_likely_states[p], np.arange(output_observations.shape[0]))]]
 
-        return output_viterbi, output_network, most_likely_states, expectations
+        return output_viterbi, output_network, most_likely_states, expectations, marginal_ll
 
     def forecast(self, train_event_data, test_event_data, m=8, num_samples=250, alpha=0.05):
         state_space = list(range(self.num_states))
@@ -338,17 +348,13 @@ class IOHMM:
 
             print("Sampling", end="", flush=True)
             for t in range(input_obs_test.shape[0]-m):
-                log_filter_prob = self.filter(input_observations, num_periods,
-                                              output_observations)
-
-                log_psi_m = torch.squeeze(self.get_log_psi(input_obs_test[t:t+m, :])).detach()
-                log_expectations_event = torch.zeros((m+1, self.num_states))
-                log_expectations_event[0, :] = log_filter_prob[-1, :]
-                for step in range(m):
-                    log_expectations_term = log_expectations_event[step, :][:, None] + log_psi_m[:, step, :]
-                    log_expectations_event[step+1, :] = torch.squeeze(torch.logsumexp(log_expectations_term, dim=0))
-
-                state_dist = torch.exp(log_expectations_event[-1, :]).detach().numpy()
+                output_pads = -torch.ones((m, 1))
+                output_observations_m = torch.cat((output_observations, output_pads), dim=0)
+                input_observations_m = torch.cat((input_observations, input_obs_test[t:t+m, :]), dim=0)
+                log_filter_prob = self.filter(input_observations_m, num_periods+m,
+                                              output_observations_m)
+                state_dist = torch.exp(log_filter_prob[-1, :]).detach().numpy()
+                state_dist = state_dist / state_dist.sum()  # Renormalization in case of numerical issues
                 states_prob_event.at[t+m] = state_dist
                 states_sim = np.random.choice(state_space, size=num_samples, p=state_dist)
                 input_observation_t = torch.reshape(input_obs_test[t, :], (1, -1))
@@ -358,9 +364,11 @@ class IOHMM:
                 obs_sim = samples_sim[(np.arange(num_samples), states_sim)]
                 lower_value = np.percentile(obs_sim, q=100*alpha/2)
                 upper_value = np.percentile(obs_sim, q=100*(1.-alpha/2))
-                map_value = np.median(obs_sim)
+                median_value = np.median(obs_sim)
+                map_value = np.mean(obs_sim)
                 forecasts_event.at[t+m, 'lower'] = lower_value
                 forecasts_event.at[t+m, 'upper'] = upper_value
+                forecasts_event.at[t+m, 'median'] = median_value
                 forecasts_event.at[t+m, 'map'] = map_value
 
                 if t % 10 == 0:
@@ -397,11 +405,11 @@ if __name__ == "__main__":
 
     event_data_train = model.format_event_data(z_train.droplevel('year'), y_train.droplevel('year'))
     event_data_test = model.format_event_data(z_validate.droplevel('year'), y_validate.droplevel('year'))
-    lls = model.fit(event_data=event_data_train, save=True)
-    # plt.plot(lls)
-    # plt.show()
+    lls = model.fit(event_data=event_data_train, save=True, num_iterations=250)
+    plt.plot(lls)
+    plt.show()
 
-    output_viterbi, output_network, most_likely_states, expectations = model.predict(event_data_train)
+    output_viterbi, output_network, most_likely_states, expectations, marginal_ll = model.predict(event_data_train)
     forecasts, states_prob = model.forecast(event_data_train, event_data_test)
 
 
