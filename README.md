@@ -1,5 +1,7 @@
 # DengAI: Predicting Disease Spread, competition hosted by DRIVENDATA
 
+We implemented a Input-Output Hidden Markov Model using the data from the 'DengAI: Predicting Disease Spread' competition hosted by DRIVENDATA. The main results are summarized in the report [Final_Report.pdf]().
+
 https://www.drivendata.org/competitions/44/dengai-predicting-disease-spread/page/82/
 
 # Problem description
